@@ -1,0 +1,163 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AMQP 1.0 Driver Configuration Schema",
+  "type": "object",
+  "properties": {
+    "amqp1": {
+      "type": "object",
+      "properties": {
+        "addr": {
+          "type": "string",
+          "description": "AMQP 1.0 connection URL",
+          "default": "amqp://guest:guest@127.0.0.1:5672/"
+        },
+        "container_id": {
+          "type": "string",
+          "description": "Unique identifier for the AMQP container"
+        },
+        "tls": {
+          "type": "object",
+          "properties": {
+            "root_ca": {
+              "type": "string",
+              "description": "Path to root CA certificate file"
+            },
+            "key": {
+              "type": "string",
+              "description": "Path to client private key file"
+            },
+            "cert": {
+              "type": "string",
+              "description": "Path to client certificate file"
+            },
+            "client_auth_type": {
+              "type": "string",
+              "enum": [
+                "no_client_cert",
+                "request_client_cert",
+                "require_any_client_cert",
+                "verify_client_cert_if_given",
+                "require_and_verify_client_cert"
+              ],
+              "default": "no_client_cert"
+            }
+          }
+        }
+      }
+    },
+    "jobs": {
+      "type": "object",
+      "properties": {
+        "pipelines": {
+          "type": "object",
+          "patternProperties": {
+            "^[a-zA-Z0-9_-]+$": {
+              "type": "object",
+              "properties": {
+                "driver": {
+                  "type": "string",
+                  "const": "amqp1"
+                },
+                "queue": {
+                  "type": "string",
+                  "description": "Queue name"
+                },
+                "exchange": {
+                  "type": "string",
+                  "description": "Exchange name",
+                  "default": "amqp1.default"
+                },
+                "exchange_type": {
+                  "type": "string",
+                  "enum": ["direct", "topic", "fanout", "headers"],
+                  "default": "direct"
+                },
+                "routing_key": {
+                  "type": "string",
+                  "description": "Routing key for message routing"
+                },
+                "prefetch": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 10,
+                  "description": "Number of messages to prefetch"
+                },
+                "priority": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "default": 10,
+                  "description": "Queue priority"
+                },
+                "durable": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether the queue should survive server restarts"
+                },
+                "exclusive": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether the queue is exclusive to this connection"
+                },
+                "multiple_ack": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether to acknowledge multiple messages at once"
+                },
+                "requeue_on_fail": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether to requeue messages on processing failure"
+                },
+                "delete_queue_on_stop": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether to delete the queue when stopping"
+                },
+                "exchange_durable": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether the exchange should survive server restarts"
+                },
+                "exchange_auto_delete": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether to auto-delete the exchange when no longer in use"
+                },
+                "queue_auto_delete": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether to auto-delete the queue when no longer in use"
+                },
+                "redial_timeout": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 60,
+                  "description": "Connection retry timeout in seconds"
+                },
+                "queue_headers": {
+                  "type": "object",
+                  "description": "Additional queue arguments/headers"
+                },
+                "consumer_id": {
+                  "type": "string",
+                  "description": "Unique consumer identifier"
+                },
+                "link_name": {
+                  "type": "string",
+                  "description": "AMQP 1.0 link name"
+                },
+                "source_filter": {
+                  "type": "string",
+                  "description": "AMQP 1.0 source filter for message filtering"
+                }
+              },
+              "required": ["driver"],
+              "additionalProperties": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}
