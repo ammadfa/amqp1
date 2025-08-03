@@ -1,4 +1,4 @@
-module github.com/ammadfa/amqp1
+module github.com/roadrunner-server/amqp1
 
 go 1.24
 

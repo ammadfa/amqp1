@@ -23,7 +23,7 @@ linters-settings:
   gocyclo:
     min-complexity: 15
   goimports:
-    local-prefixes: github.com/ammadfa/amqp1
+    local-prefixes: github.com/roadrunner-server/amqp1
   gomnd:
     settings:
       mnd:

@@ -540,8 +540,31 @@ func (d *Driver) handleItem(ctx context.Context, msg *Item) error {
 
 	d.prop.Inject(ctx, propagation.HeaderCarrier(msg.headers))
 
+	// Create RoadRunner-compatible payload structure
+	// Pack job metadata into header as JSON
+	headerData, err := pack(msg.ident, msg)
+	if err != nil {
+		return errors.E(op, err)
+	}
+	
+	headerJSON, err := json.Marshal(headerData)
+	if err != nil {
+		return errors.E(op, err)
+	}
+
+	// Create structured payload with header and body
+	payload := map[string]interface{}{
+		"header": string(headerJSON),
+		"body":   string(msg.Body()),
+	}
+	
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return errors.E(op, err)
+	}
+
 	// Convert headers to AMQP 1.0 format
-	amqpMsg := amqp.NewMessage(msg.Body())
+	amqpMsg := amqp.NewMessage(payloadJSON)
 	amqpMsg.ApplicationProperties = convertToAMQP1Headers(msg.headers)
 
 	// Handle timeouts/delays
@@ -730,22 +753,39 @@ func (d *Driver) listener() {
 func (d *Driver) processMessage(deliveryContext *amqp.DeliveryContext) error {
 	msg := deliveryContext.Message()
 	
-	// Convert AMQP 1.0 message to internal job format
-	item := &Item{
-		job:     "",
-		ident:   uuid.NewString(),
-		payload: msg.Data[0], // Take first data section
-		headers: convertFromAMQP1Headers(msg.ApplicationProperties),
-		Options: &Options{},
+	// Parse structured payload with header and body
+	var payload map[string]interface{}
+	err := json.Unmarshal(msg.Data[0], &payload)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal payload: %w", err)
 	}
-
-	// Extract job information from application properties
-	if jobName, ok := msg.ApplicationProperties["job"].(string); ok {
-		item.job = jobName
+	
+	// Extract header and body from structured payload
+	headerStr, ok := payload["header"].(string)
+	if !ok {
+		return fmt.Errorf("payload missing header field")
 	}
-	if jobID, ok := msg.ApplicationProperties[ujobID].(string); ok {
-		item.ident = jobID
+	
+	bodyStr, ok := payload["body"].(string)
+	if !ok {
+		return fmt.Errorf("payload missing body field")
 	}
+	
+	// Parse header JSON to get job metadata
+	var headerData map[string]interface{}
+	err = json.Unmarshal([]byte(headerStr), &headerData)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal header: %w", err)
+	}
+	
+	// Unpack job metadata using existing unpack function
+	item, err := unpack(headerData)
+	if err != nil {
+		return fmt.Errorf("failed to unpack job metadata: %w", err)
+	}
+	
+	// Set the actual job payload
+	item.payload = []byte(bodyStr)
 
 	// Push to pipeline queue
 	d.pq.Insert(item)
