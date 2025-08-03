@@ -9,13 +9,12 @@ GOMOD=$(GOCMD) mod
 GOLINT=golangci-lint
 
 # Build parameters
-BINARY_NAME=amqp1
 VERSION?=dev
 BUILD_TIME=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # Build the project
 build:
-	$(GOBUILD) -v -ldflags "-X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME)" -o $(BINARY_NAME) ./...
+	$(GOBUILD) -v ./...
 
 # Run tests
 test:
@@ -42,7 +41,6 @@ update:
 # Clean build artifacts
 clean:
 	$(GOCMD) clean
-	rm -f $(BINARY_NAME)
 	rm -f coverage.out
 	rm -f coverage.html
 

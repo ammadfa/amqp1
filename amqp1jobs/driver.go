@@ -11,7 +11,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/rabbitmq-amqp-go-client/pkg/rabbitmqamqp"
 	"github.com/roadrunner-server/api/v4/plugins/v4/jobs"
 	"github.com/roadrunner-server/errors"
@@ -546,7 +545,7 @@ func (d *Driver) handleItem(ctx context.Context, msg *Item) error {
 	if err != nil {
 		return errors.E(op, err)
 	}
-	
+
 	headerJSON, err := json.Marshal(headerData)
 	if err != nil {
 		return errors.E(op, err)
@@ -557,7 +556,7 @@ func (d *Driver) handleItem(ctx context.Context, msg *Item) error {
 		"header": string(headerJSON),
 		"body":   string(msg.Body()),
 	}
-	
+
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		return errors.E(op, err)
@@ -752,38 +751,38 @@ func (d *Driver) listener() {
 
 func (d *Driver) processMessage(deliveryContext *amqp.DeliveryContext) error {
 	msg := deliveryContext.Message()
-	
+
 	// Parse structured payload with header and body
 	var payload map[string]interface{}
 	err := json.Unmarshal(msg.Data[0], &payload)
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal payload: %w", err)
 	}
-	
+
 	// Extract header and body from structured payload
 	headerStr, ok := payload["header"].(string)
 	if !ok {
 		return fmt.Errorf("payload missing header field")
 	}
-	
+
 	bodyStr, ok := payload["body"].(string)
 	if !ok {
 		return fmt.Errorf("payload missing body field")
 	}
-	
+
 	// Parse header JSON to get job metadata
 	var headerData map[string]interface{}
 	err = json.Unmarshal([]byte(headerStr), &headerData)
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal header: %w", err)
 	}
-	
+
 	// Unpack job metadata using existing unpack function
 	item, err := unpack(headerData)
 	if err != nil {
 		return fmt.Errorf("failed to unpack job metadata: %w", err)
 	}
-	
+
 	// Set the actual job payload
 	item.payload = []byte(bodyStr)
 
