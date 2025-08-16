@@ -17,7 +17,7 @@ func TestConfigInitDefault(t *testing.T) {
 			config: config{},
 			expected: config{
 				ExchangeType:  "direct",
-				Exchange:      "amqp1.default",
+				Exchange:      "",
 				RedialTimeout: 60,
 				Prefetch:      10,
 				Priority:      10,
@@ -45,7 +45,7 @@ func TestConfigInitDefault(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.config.InitDefault()
 			assert.NoError(t, err)
-			
+
 			assert.Equal(t, tt.expected.ExchangeType, tt.config.ExchangeType)
 			assert.Equal(t, tt.expected.Exchange, tt.config.Exchange)
 			assert.Equal(t, tt.expected.RedialTimeout, tt.config.RedialTimeout)

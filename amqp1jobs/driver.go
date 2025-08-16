@@ -3,15 +3,19 @@ package amqp1jobs
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	stderr "errors"
 	"fmt"
+	"net/url"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	amqp "github.com/rabbitmq/rabbitmq-amqp-go-client/pkg/rabbitmqamqp"
+	"github.com/Azure/go-amqp"
 	"github.com/roadrunner-server/api/v4/plugins/v4/jobs"
 	"github.com/roadrunner-server/errors"
 	"github.com/roadrunner-server/events"
@@ -50,12 +54,15 @@ type Driver struct {
 	eventBus *events.Bus
 	id       string
 
-	// amqp1 connection and management
-	environment *amqp.Environment
-	connection  *amqp.AmqpConnection
-	management  *amqp.AmqpManagement
-	publisher   *amqp.Publisher
-	consumer    *amqp.Consumer
+	// Pure AMQP 1.0 connection and management using Azure go-amqp
+	conn     *amqp.Conn
+	session  *amqp.Session
+	sender   *amqp.Sender
+	receiver *amqp.Receiver
+
+	// Connection detection
+	isAzureServiceBus bool
+	isRabbitMQ        bool
 
 	connStr     string
 	containerID string
@@ -116,22 +123,45 @@ func FromConfig(tracer *sdktrace.TracerProvider, configKey string, log *zap.Logg
 	}
 
 	// PARSE CONFIGURATION START -------
+	log.Debug("starting amqp1 configuration parsing",
+		zap.String("configKey", configKey),
+		zap.String("pluginName", pluginName))
+
 	var conf config
 	err := cfg.UnmarshalKey(configKey, &conf)
 	if err != nil {
 		return nil, errors.E(op, err)
 	}
 
+	log.Debug("after pipeline-specific config load",
+		zap.String("exchange", conf.Exchange),
+		zap.String("routingKey", conf.RoutingKey))
+
 	err = cfg.UnmarshalKey(pluginName, &conf)
 	if err != nil {
 		return nil, errors.E(op, err)
 	}
+
+	log.Debug("after global config load",
+		zap.String("exchange", conf.Exchange),
+		zap.String("routingKey", conf.RoutingKey))
 
 	err = conf.InitDefault()
 	if err != nil {
 		return nil, err
 	}
 	// PARSE CONFIGURATION END -------
+
+	// DEBUG: Log the parsed configuration values
+	log.Debug("amqp1 configuration parsed",
+		zap.String("exchange", conf.Exchange),
+		zap.String("routingKey", conf.RoutingKey),
+		zap.String("queue", conf.Queue),
+		zap.String("exchangeType", conf.ExchangeType),
+		zap.String("addr", conf.Addr),
+		zap.String("username", conf.Username),
+		zap.String("password", "***"),  // Don't log password in plain text
+		zap.String("containerID", conf.ContainerID))
 
 	eventBus, id := events.NewEventBus()
 
@@ -173,7 +203,12 @@ func FromConfig(tracer *sdktrace.TracerProvider, configKey string, log *zap.Logg
 		sourceFilter: conf.SourceFilter,
 	}
 
-	jb.environment, jb.connection, err = dial(conf.Addr, &conf)
+	// Detect connection type and initialize accordingly
+	jb.isAzureServiceBus = strings.Contains(conf.Addr, "servicebus.windows.net")
+	jb.isRabbitMQ = !jb.isAzureServiceBus // Assume RabbitMQ if not Azure Service Bus
+
+	// Connect using pure AMQP 1.0 protocol
+	jb.conn, err = connectAMQP(conf.Addr, &conf)
 	if err != nil {
 		return nil, errors.E(op, err)
 	}
@@ -206,22 +241,42 @@ func FromPipeline(tracer *sdktrace.TracerProvider, pipeline jobs.Pipeline, log *
 	}
 
 	// PARSE CONFIGURATION -------
+	log.Debug("starting FromPipeline configuration parsing",
+		zap.String("pluginName", pluginName))
+
 	var conf config
 	err := cfg.UnmarshalKey(pluginName, &conf)
 	if err != nil {
 		return nil, errors.E(op, err)
 	}
+
+	log.Debug("after global config load in FromPipeline",
+		zap.String("exchange", conf.Exchange))
+
 	err = conf.InitDefault()
 	if err != nil {
 		return nil, err
 	}
+
+	log.Debug("after InitDefault in FromPipeline",
+		zap.String("exchange", conf.Exchange))
 	// PARSE CONFIGURATION -------
+
+	// allow addr override from pipeline
+	if addr := pipeline.String("addr", ""); addr != "" {
+		conf.Addr = addr
+	}
 
 	// parse prefetch
 	prf, err := strconv.Atoi(pipeline.String(prefetch, "10"))
 	if err != nil {
 		log.Error("prefetch parse, driver will use default (10) prefetch", zap.String("prefetch", pipeline.String(prefetch, "10")))
 	}
+
+	log.Debug("pipeline values",
+		zap.String("exchangeKey_value", pipeline.String(exchangeKey, "")),
+		zap.String("routingKey_value", pipeline.String(routingKey, "")),
+		zap.String("queue_value", pipeline.String(queue, "")))
 
 	eventBus, id := events.NewEventBus()
 
@@ -240,7 +295,7 @@ func FromPipeline(tracer *sdktrace.TracerProvider, pipeline jobs.Pipeline, log *
 		routingKey:        pipeline.String(routingKey, ""),
 		queue:             pipeline.String(queue, ""),
 		exchangeType:      pipeline.String(exchangeType, "direct"),
-		exchangeName:      pipeline.String(exchangeKey, "amqp1.default"),
+		exchangeName:      pipeline.String(exchangeKey, ""),
 		prefetch:          prf,
 		priority:          int64(pipeline.Int(priority, 10)),
 		durable:           pipeline.Bool(durable, false),
@@ -278,7 +333,12 @@ func FromPipeline(tracer *sdktrace.TracerProvider, pipeline jobs.Pipeline, log *
 		jb.queueHeaders = tp
 	}
 
-	jb.environment, jb.connection, err = dial(conf.Addr, &conf)
+	// Detect connection type and initialize accordingly
+	jb.isAzureServiceBus = strings.Contains(conf.Addr, "servicebus.windows.net")
+	jb.isRabbitMQ = !jb.isAzureServiceBus // Assume RabbitMQ if not Azure Service Bus
+
+	// Connect using pure AMQP 1.0 protocol
+	jb.conn, err = connectAMQP(conf.Addr, &conf)
 	if err != nil {
 		return nil, errors.E(op, err)
 	}
@@ -303,7 +363,8 @@ func (d *Driver) Push(ctx context.Context, job jobs.Message) error {
 	ctx, span := trace.SpanFromContext(ctx).TracerProvider().Tracer(tracerName).Start(ctx, "amqp1_push")
 	defer span.End()
 
-	if d.routingKey == "" && d.exchangeType != "fanout" {
+	// For RabbitMQ with named exchanges, routing key is often required; for Azure Service Bus, it's queue-centric and may be empty
+	if !d.isAzureServiceBus && d.routingKey == "" && d.exchangeType != "fanout" && d.exchangeName != "" {
 		return errors.Str("empty routing key, consider adding the routing key name to the AMQP1 configuration")
 	}
 
@@ -341,20 +402,22 @@ func (d *Driver) Run(ctx context.Context, p jobs.Pipeline) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// declare/bind/check the queue
+	// For Azure Service Bus and RabbitMQ, queues should exist before consuming
+	// We don't need to declare them as both brokers expect pre-existing queues
+
+	// Create receiver for AMQP 1.0 consumption
 	var err error
-	err = d.declareQueue()
+	// apply link credit (prefetch) if available
+	var rcvOpts *amqp.ReceiverOptions
+	if d.prefetch > 0 {
+		rcvOpts = &amqp.ReceiverOptions{Credit: int32(d.prefetch)}
+	}
+	d.receiver, err = d.session.NewReceiver(context.Background(), d.queue, rcvOpts)
 	if err != nil {
-		return err
+		return errors.E(op, fmt.Errorf("failed to create AMQP receiver: %w", err))
 	}
 
-	// Create consumer for AMQP 1.0
-	d.consumer, err = d.connection.NewConsumer(context.Background(), d.queue, nil)
-	if err != nil {
-		return errors.E(op, err)
-	}
-
-	// start reading messages from the consumer
+	// start reading messages from the receiver
 	d.listener()
 
 	atomic.StoreUint32(&d.listeners, 1)
@@ -371,11 +434,11 @@ func (d *Driver) State(ctx context.Context) (*jobs.State, error) {
 
 	// if there is no queue, check the connection instead
 	if d.queue == "" {
-		// d.connection should be protected (redial)
+		// d.conn should be protected (redial)
 		d.mu.RLock()
 		defer d.mu.RUnlock()
 
-		if d.connection != nil {
+		if d.conn != nil {
 			return &jobs.State{
 				Priority: uint64(pipe.Priority()), //nolint:gosec
 				Pipeline: pipe.Name(),
@@ -388,8 +451,8 @@ func (d *Driver) State(ctx context.Context) (*jobs.State, error) {
 		return nil, errors.Str("connection is closed, can't get the state")
 	}
 
-	// For AMQP 1.0, we would need to query queue info through management
-	// This is a simplified implementation
+	// For pure AMQP 1.0, we don't have management APIs to query queue info
+	// Both Azure Service Bus and RabbitMQ would require separate management APIs
 	return &jobs.State{
 		Priority: uint64(pipe.Priority()), //nolint:gosec
 		Pipeline: pipe.Name(),
@@ -427,10 +490,10 @@ func (d *Driver) Pause(ctx context.Context, p string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if d.consumer != nil {
-		err := d.consumer.Close(context.Background())
+	if d.receiver != nil {
+		err := d.receiver.Close(context.Background())
 		if err != nil {
-			d.log.Error("close consumer", zap.Error(err))
+			d.log.Error("close receiver", zap.Error(err))
 			return err
 		}
 	}
@@ -469,15 +532,17 @@ func (d *Driver) Resume(ctx context.Context, p string) error {
 		return errors.Str("amqp1 listener is already in the active state")
 	}
 
-	var err error
-	err = d.declareQueue()
-	if err != nil {
-		return err
-	}
+	// For Azure Service Bus and RabbitMQ, queues should exist before consuming
+	// We don't need to declare them as both brokers expect pre-existing queues
 
-	d.consumer, err = d.connection.NewConsumer(context.Background(), d.queue, nil)
+	var err error
+	var rcvOpts2 *amqp.ReceiverOptions
+	if d.prefetch > 0 {
+		rcvOpts2 = &amqp.ReceiverOptions{Credit: int32(d.prefetch)}
+	}
+	d.receiver, err = d.session.NewReceiver(context.Background(), d.queue, rcvOpts2)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create AMQP receiver: %w", err)
 	}
 
 	// run listener
@@ -511,30 +576,30 @@ func (d *Driver) Stop(ctx context.Context) error {
 	// remove all pending JOBS associated with the pipeline
 	_ = d.pq.Remove(pipe.Name())
 
-	// Close consumer and publisher
-	if d.consumer != nil {
-		_ = d.consumer.Close(context.Background())
+	// Close Azure AMQP connections
+	if d.receiver != nil {
+		_ = d.receiver.Close(context.Background())
 	}
-	if d.publisher != nil {
-		_ = d.publisher.Close(context.Background())
+	if d.sender != nil {
+		_ = d.sender.Close(context.Background())
 	}
-	if d.connection != nil {
-		_ = d.connection.Close(context.Background())
+	if d.session != nil {
+		_ = d.session.Close(context.Background())
 	}
-	if d.environment != nil {
-		_ = d.environment.CloseConnections(context.Background())
+	if d.conn != nil {
+		_ = d.conn.Close()
 	}
 
 	d.log.Debug("pipeline was stopped", zap.String("driver", pipe.Driver()), zap.String("pipeline", pipe.Name()), zap.Time("start", start), zap.Int64("elapsed", time.Since(start).Milliseconds()))
 	return nil
 }
 
-// handleItem publishes message to AMQP 1.0
+// handleItem publishes message to AMQP 1.0 using pure Azure go-amqp
 func (d *Driver) handleItem(ctx context.Context, msg *Item) error {
 	const op = errors.Op("amqp1_driver_handle_item")
 
-	if d.publisher == nil {
-		return errors.E(op, errors.Str("publisher not initialized"))
+	if d.sender == nil {
+		return errors.E(op, errors.Str("sender not initialized"))
 	}
 
 	d.prop.Inject(ctx, propagation.HeaderCarrier(msg.headers))
@@ -551,6 +616,9 @@ func (d *Driver) handleItem(ctx context.Context, msg *Item) error {
 		return errors.E(op, err)
 	}
 
+	// Debug: Log the header JSON being created
+	d.log.Debug("AMQP1 Job Header JSON", zap.String("header", string(headerJSON)))
+
 	// Create structured payload with header and body
 	payload := map[string]interface{}{
 		"header": string(headerJSON),
@@ -562,144 +630,239 @@ func (d *Driver) handleItem(ctx context.Context, msg *Item) error {
 		return errors.E(op, err)
 	}
 
-	// Convert headers to AMQP 1.0 format
-	amqpMsg := amqp.NewMessage(payloadJSON)
-	amqpMsg.ApplicationProperties = convertToAMQP1Headers(msg.headers)
+	// Debug: Log the full payload
+	d.log.Debug("AMQP1 Full Payload JSON", zap.String("payload", string(payloadJSON)))
+
+	// Create Azure AMQP message
+	amqpMsg := &amqp.Message{
+		Data: [][]byte{payloadJSON},
+	}
+
+	// Convert headers to Azure AMQP format
+	if len(msg.headers) > 0 {
+		amqpMsg.ApplicationProperties = make(map[string]interface{})
+		for key, values := range msg.headers {
+			if len(values) > 0 {
+				amqpMsg.ApplicationProperties[key] = values[0]
+			}
+		}
+	}
+
+	// Handle routing key for RabbitMQ
+	if d.isRabbitMQ && d.routingKey != "" && d.exchangeName != "" {
+		if amqpMsg.ApplicationProperties == nil {
+			amqpMsg.ApplicationProperties = make(map[string]interface{})
+		}
+		amqpMsg.ApplicationProperties["x-routing-key"] = d.routingKey
+		amqpMsg.Properties = &amqp.MessageProperties{
+			Subject: &d.routingKey, // Subject is used for routing in AMQP 1.0
+		}
+	}
 
 	// Handle timeouts/delays
 	if msg.Options.DelayDuration() > 0 {
 		atomic.AddInt64(d.delayed, 1)
-		// For AMQP 1.0, delays might need to be handled differently
-		// This is a simplified implementation
-		delayMs := int64(msg.Options.DelayDuration().Seconds() * 1000)
-		amqpMsg.ApplicationProperties["x-delay"] = delayMs
+
+		if d.isAzureServiceBus {
+			// Azure Service Bus uses scheduled messages for delays
+			scheduleTime := time.Now().Add(msg.Options.DelayDuration())
+			amqpMsg.Annotations = make(amqp.Annotations)
+			amqpMsg.Annotations["x-opt-scheduled-enqueue-time"] = scheduleTime
+
+			d.log.Debug("Azure message scheduled",
+				zap.Duration("delay", msg.Options.DelayDuration()),
+				zap.Time("scheduleTime", scheduleTime))
+		} else {
+			// RabbitMQ: use x-delay header (requires rabbitmq-delayed-message-exchange plugin)
+			delayMs := int64(msg.Options.DelayDuration().Seconds() * 1000)
+			if amqpMsg.ApplicationProperties == nil {
+				amqpMsg.ApplicationProperties = make(map[string]interface{})
+			}
+			amqpMsg.ApplicationProperties["x-delay"] = delayMs
+
+			d.log.Debug("RabbitMQ message delayed",
+				zap.Duration("delay", msg.Options.DelayDuration()),
+				zap.Int64("delayMs", delayMs))
+		}
 	}
 
-	publishResult, err := d.publisher.Publish(ctx, amqpMsg)
+	// Send the message
+	err = d.sender.Send(ctx, amqpMsg, nil)
 	if err != nil {
 		if msg.Options.DelayDuration() > 0 {
 			atomic.AddInt64(d.delayed, ^int64(0))
 		}
-		return errors.E(op, err)
+		return errors.E(op, fmt.Errorf("failed to send message: %w", err))
 	}
 
-	// Check publish result
-	switch publishResult.Outcome.(type) {
-	case *amqp.StateAccepted:
-		// Message was accepted
-		return nil
-	case *amqp.StateReleased:
-		// Message was not routed
-		if msg.Options.DelayDuration() > 0 {
-			atomic.AddInt64(d.delayed, ^int64(0))
-		}
-		return errors.E(op, errors.Str("message was not routed"))
-	case *amqp.StateRejected:
-		// Message was rejected
-		if msg.Options.DelayDuration() > 0 {
-			atomic.AddInt64(d.delayed, ^int64(0))
-		}
-		stateType := publishResult.Outcome.(*amqp.StateRejected)
-		if stateType.Error != nil {
-			return errors.E(op, stateType.Error)
-		}
-		return errors.E(op, errors.Str("message was rejected"))
-	default:
-		if msg.Options.DelayDuration() > 0 {
-			atomic.AddInt64(d.delayed, ^int64(0))
-		}
-		return errors.E(op, fmt.Errorf("unknown publish outcome: %v", publishResult.Outcome))
-	}
+	d.log.Debug("Message sent successfully",
+		zap.String("queue", d.queue),
+		zap.Bool("isAzureServiceBus", d.isAzureServiceBus))
+
+	return nil
 }
 
-func dial(addr string, conf *config) (*amqp.Environment, *amqp.AmqpConnection, error) {
-	// Create environment
-	env := amqp.NewEnvironment(addr, nil)
+// connectAMQP creates a pure AMQP 1.0 connection using Azure go-amqp library
+// Compatible with both Azure Service Bus and RabbitMQ
+func connectAMQP(addr string, conf *config) (*amqp.Conn, error) {
+	fmt.Printf("AMQP DEBUG: addr=%s, containerID=%s\n", addr, conf.ContainerID)
 
-	// Create connection
-	conn, err := env.NewConnection(context.Background())
+	// Parse the connection string to extract credentials and host
+	parsedURL, err := url.Parse(addr)
 	if err != nil {
-		return nil, nil, err
+		fmt.Printf("AMQP ERROR: Failed to parse URL: %v\n", err)
+		return nil, fmt.Errorf("failed to parse connection URL: %w", err)
 	}
 
-	return env, conn, nil
+	// Extract credentials from URL
+	var username, password string
+	if parsedURL.User != nil {
+		username = parsedURL.User.Username()
+		password, _ = parsedURL.User.Password()
+		// URL decode the password
+		if decodedPassword, err := url.QueryUnescape(password); err == nil {
+			password = decodedPassword
+		}
+		fmt.Printf("AMQP DEBUG: Credentials extracted - username: %s\n", username)
+	}
+
+	// Override with explicit config values if provided
+	if conf.Username != "" {
+		username = conf.Username
+	}
+	if conf.Password != "" {
+		password = conf.Password
+	}
+
+	// Create clean host address without credentials
+	hostAddr := fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host)
+	fmt.Printf("AMQP DEBUG: Clean host address: %s\n", hostAddr)
+
+	// Detect broker type
+	isAzureServiceBus := strings.Contains(addr, "servicebus.windows.net")
+	isRabbitMQ := !isAzureServiceBus
+
+	fmt.Printf("AMQP DEBUG: Broker detection - Azure Service Bus: %v, RabbitMQ: %v\n", isAzureServiceBus, isRabbitMQ)
+
+	// Configure Azure AMQP connection options
+	connOptions := &amqp.ConnOptions{}
+
+	// Set container ID if provided
+	if conf.ContainerID != "" {
+		connOptions.ContainerID = conf.ContainerID
+		fmt.Printf("AMQP DEBUG: Container ID set: %s\n", conf.ContainerID)
+	}
+
+	// Configure SASL authentication
+	if username != "" && password != "" {
+		fmt.Printf("AMQP DEBUG: Configuring SASL PLAIN authentication\n")
+		connOptions.SASLType = amqp.SASLTypePlain(username, password)
+	}
+
+	// Configure TLS if using amqps
+	if strings.HasPrefix(parsedURL.Scheme, "amqps") {
+		fmt.Printf("AMQP DEBUG: Configuring TLS\n")
+		tlsConfig := &tls.Config{
+			ServerName: parsedURL.Hostname(),
+		}
+
+		// Apply custom TLS configuration if provided
+		if conf.TLS != nil {
+			if conf.TLS.InsecureSkipVerify {
+				tlsConfig.InsecureSkipVerify = true
+				fmt.Printf("AMQP DEBUG: TLS verification disabled\n")
+			}
+
+			if conf.TLS.RootCA != "" {
+				caCert, err := os.ReadFile(conf.TLS.RootCA)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read CA certificate: %w", err)
+				}
+				rootCAPool := x509.NewCertPool()
+				if !rootCAPool.AppendCertsFromPEM(caCert) {
+					return nil, fmt.Errorf("failed to parse CA certificate")
+				}
+				tlsConfig.RootCAs = rootCAPool
+				fmt.Printf("AMQP DEBUG: Custom RootCA loaded\n")
+			}
+
+			if conf.TLS.Cert != "" && conf.TLS.Key != "" {
+				cert, err := tls.LoadX509KeyPair(conf.TLS.Cert, conf.TLS.Key)
+				if err != nil {
+					return nil, fmt.Errorf("failed to load client certificate: %w", err)
+				}
+				tlsConfig.Certificates = []tls.Certificate{cert}
+				fmt.Printf("AMQP DEBUG: Client certificate loaded\n")
+			}
+		} else if isRabbitMQ {
+			// For RabbitMQ, be more permissive with TLS in development
+			fmt.Printf("AMQP DEBUG: Using development TLS settings for RabbitMQ\n")
+			tlsConfig.InsecureSkipVerify = true
+		}
+
+		connOptions.TLSConfig = tlsConfig
+	}
+
+	// Set hostname for proper TLS verification
+	connOptions.HostName = parsedURL.Hostname()
+
+	fmt.Printf("AMQP DEBUG: Connecting to AMQP broker...\n")
+
+	// Create the connection
+	conn, err := amqp.Dial(context.Background(), hostAddr, connOptions)
+	if err != nil {
+		fmt.Printf("AMQP ERROR: Connection failed: %v\n", err)
+		return nil, fmt.Errorf("failed to connect to AMQP broker: %w", err)
+	}
+
+	fmt.Printf("AMQP DEBUG: Connection successful\n")
+	return conn, nil
 }
 
 func (d *Driver) init() error {
 	var err error
 
-	// Initialize management client
-	d.management = d.connection.Management()
+	d.log.Debug("AMQP1 Driver Debug",
+		zap.String("exchangeName", d.exchangeName),
+		zap.String("routingKey", d.routingKey),
+		zap.Bool("isAzureServiceBus", d.isAzureServiceBus),
+		zap.Bool("isRabbitMQ", d.isRabbitMQ))
 
-	// Initialize publisher
-	d.publisher, err = d.connection.NewPublisher(context.Background(), &amqp.ExchangeAddress{
-		Exchange: d.exchangeName,
-		Key:      d.routingKey,
-	}, nil)
+	// Create session
+	d.session, err = d.conn.NewSession(context.Background(), nil)
 	if err != nil {
-		return fmt.Errorf("failed to create publisher: %w", err)
+		return fmt.Errorf("failed to create AMQP session: %w", err)
 	}
 
-	return nil
-}
+	// For Azure Service Bus, queues must be pre-created in the portal
+	// For RabbitMQ, we can declare queues via AMQP, but Azure go-amqp doesn't support management operations
+	// So we'll rely on pre-existing queues for both brokers
 
-func (d *Driver) declareQueue() error {
-	if d.management == nil {
-		return errors.Str("management client not initialized")
+	// Create sender for publishing messages
+	// Azure Service Bus uses queue names directly, RabbitMQ can use exchanges or queues
+	var targetAddress string
+	if d.isAzureServiceBus {
+		// Azure Service Bus: send directly to queue
+		targetAddress = d.queue
+		d.log.Debug("Azure Service Bus: using queue address", zap.String("queue", d.queue))
+	} else if d.exchangeName == "" {
+		// RabbitMQ: default exchange, use queue name
+		targetAddress = d.queue
+		d.log.Debug("RabbitMQ: using default exchange with queue", zap.String("queue", d.queue))
+	} else {
+		// RabbitMQ: named exchange
+		targetAddress = d.exchangeName
+		d.log.Debug("RabbitMQ: using named exchange", zap.String("exchange", d.exchangeName), zap.String("routingKey", d.routingKey))
 	}
 
-	// Declare exchange if needed
-	if d.exchangeName != "" && d.exchangeName != "amqp1.default" {
-		var exchangeSpec amqp.IExchangeSpecification
-		switch d.exchangeType {
-		case "direct":
-			exchangeSpec = &amqp.DirectExchangeSpecification{
-				Name: d.exchangeName,
-			}
-		case "topic":
-			exchangeSpec = &amqp.TopicExchangeSpecification{
-				Name: d.exchangeName,
-			}
-		case "fanout":
-			exchangeSpec = &amqp.FanOutExchangeSpecification{
-				Name: d.exchangeName,
-			}
-		case "headers":
-			exchangeSpec = &amqp.HeadersExchangeSpecification{
-				Name: d.exchangeName,
-			}
-		default:
-			exchangeSpec = &amqp.DirectExchangeSpecification{
-				Name: d.exchangeName,
-			}
-		}
-		_, err := d.management.DeclareExchange(context.Background(), exchangeSpec)
-		if err != nil {
-			return fmt.Errorf("failed to declare exchange: %w", err)
-		}
-	}
-
-	// Declare queue - using QuorumQueueSpecification as it's more modern
-	queueSpec := &amqp.QuorumQueueSpecification{
-		Name: d.queue,
-	}
-	_, err := d.management.DeclareQueue(context.Background(), queueSpec)
+	d.sender, err = d.session.NewSender(context.Background(), targetAddress, nil)
 	if err != nil {
-		return fmt.Errorf("failed to declare queue: %w", err)
+		return fmt.Errorf("failed to create AMQP sender: %w", err)
 	}
 
-	// Bind queue to exchange if needed
-	if d.exchangeName != "" && d.exchangeName != "amqp1.default" && d.routingKey != "" {
-		binding := &amqp.ExchangeToQueueBindingSpecification{
-			SourceExchange:   d.exchangeName,
-			DestinationQueue: d.queue,
-			BindingKey:       d.routingKey,
-		}
-		_, err = d.management.Bind(context.Background(), binding)
-		if err != nil {
-			return fmt.Errorf("failed to bind queue: %w", err)
-		}
-	}
+	d.log.Debug("AMQP1 Driver initialized successfully",
+		zap.String("targetAddress", targetAddress),
+		zap.Bool("isAzureServiceBus", d.isAzureServiceBus))
 
 	return nil
 }
@@ -708,7 +871,7 @@ func (d *Driver) listener() {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				d.log.Error("panic in consumer listener", zap.Any("recover", r))
+				d.log.Error("panic in receiver listener", zap.Any("recover", r))
 			}
 		}()
 
@@ -717,9 +880,10 @@ func (d *Driver) listener() {
 			case <-d.stopCh:
 				return
 			default:
-				deliveryContext, err := d.consumer.Receive(context.Background())
+				// Receive message using Azure AMQP receiver
+				message, err := d.receiver.Receive(context.Background(), nil)
 				if stderr.Is(err, context.Canceled) {
-					d.log.Info("consumer closed", zap.Error(err))
+					d.log.Info("receiver closed", zap.Error(err))
 					return
 				}
 				if err != nil {
@@ -727,39 +891,40 @@ func (d *Driver) listener() {
 					continue
 				}
 
-				if deliveryContext == nil {
+				if message == nil {
 					continue
 				}
 
 				// Process the message
-				err = d.processMessage(deliveryContext)
+				err = d.processMessage(message)
 				if err != nil {
 					d.log.Error("failed to process message", zap.Error(err))
-					// Handle rejection based on requeueOnFail setting
-					if d.requeueOnFail {
-						deliveryContext.Requeue(context.Background()) // requeue
-					} else {
-						deliveryContext.Discard(context.Background(), nil) // don't requeue
-					}
-				} else {
-					deliveryContext.Accept(context.Background())
 				}
 			}
 		}
 	}()
 }
 
-func (d *Driver) processMessage(deliveryContext *amqp.DeliveryContext) error {
-	msg := deliveryContext.Message()
-
-	// Parse structured payload with header and body
-	var payload map[string]interface{}
-	err := json.Unmarshal(msg.Data[0], &payload)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal payload: %w", err)
+func (d *Driver) processMessage(message *amqp.Message) error {
+	// Get message data
+	var messageData []byte
+	if len(message.Data) > 0 {
+		messageData = message.Data[0] // Azure AMQP stores data as [][]byte
+	} else {
+		return fmt.Errorf("message has no data")
 	}
 
-	// Extract header and body from structured payload
+	// Parse the JSON payload
+	var payload map[string]interface{}
+	err := json.Unmarshal(messageData, &payload)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal message payload: %w", err)
+	}
+
+	// Debug: Log received payload
+	d.log.Debug("AMQP1 Received Payload", zap.String("payload", string(messageData)))
+
+	// Extract header and body
 	headerStr, ok := payload["header"].(string)
 	if !ok {
 		return fmt.Errorf("payload missing header field")
@@ -770,6 +935,9 @@ func (d *Driver) processMessage(deliveryContext *amqp.DeliveryContext) error {
 		return fmt.Errorf("payload missing body field")
 	}
 
+	// Debug: Log header before parsing
+	d.log.Debug("AMQP1 Header before parsing", zap.String("header", headerStr))
+
 	// Parse header JSON to get job metadata
 	var headerData map[string]interface{}
 	err = json.Unmarshal([]byte(headerStr), &headerData)
@@ -777,16 +945,23 @@ func (d *Driver) processMessage(deliveryContext *amqp.DeliveryContext) error {
 		return fmt.Errorf("failed to unmarshal header: %w", err)
 	}
 
+	// Debug: Log parsed header data
+	headerDataJSON, _ := json.Marshal(headerData)
+	d.log.Debug("AMQP1 Parsed Header Data", zap.String("headerData", string(headerDataJSON)))
+
 	// Unpack job metadata using existing unpack function
 	item, err := unpack(headerData)
 	if err != nil {
 		return fmt.Errorf("failed to unpack job metadata: %w", err)
 	}
 
-	// Set the actual job payload
+	// Set the actual job payload and broker control handles
 	item.payload = []byte(bodyStr)
+	item.receiver = d.receiver
+	item.message = message
+	item.driver = d
 
-	// Push to pipeline queue
+	// Push to pipeline queue; ACK/NACK will be triggered later by the Jobs plugin calling item methods
 	d.pq.Insert(item)
 	return nil
 }
@@ -799,78 +974,4 @@ func ptrTo[T any](val T) *T {
 	return &val
 }
 
-func (d *Driver) setRoutingKey(headers map[string][]string) string {
-	if val, ok := headers[xRoutingKey]; ok {
-		delete(headers, xRoutingKey)
-		if len(val) == 1 && val[0] != "" {
-			return val[0]
-		}
-	}
-
-	return d.routingKey
-}
-
-func (d *Driver) queueOrRk() string {
-	if d.queue != "" {
-		return d.queue
-	}
-
-	return d.routingKey
-}
-
-// Helper functions for converting between header formats
-func convertHeaders(headers map[string]any) map[string]interface{} {
-	if headers == nil {
-		return nil
-	}
-	result := make(map[string]interface{})
-	for k, v := range headers {
-		result[k] = v
-	}
-	return result
-}
-
-func convertToAMQP1Headers(headers map[string][]string) map[string]interface{} {
-	result := make(map[string]interface{})
-	for k, v := range headers {
-		if len(v) == 1 {
-			result[k] = v[0]
-		} else {
-			result[k] = v
-		}
-	}
-	return result
-}
-
-func convertFromAMQP1Headers(headers map[string]interface{}) map[string][]string {
-	result := make(map[string][]string)
-	for k, v := range headers {
-		switch val := v.(type) {
-		case string:
-			result[k] = []string{val}
-		case []string:
-			result[k] = val
-		default:
-			result[k] = []string{fmt.Sprintf("%v", val)}
-		}
-	}
-	return result
-}
-
-// initTLS initializes TLS configuration
-func initTLS(tlsConfig *TLS, cfg *tls.Config) error {
-	if tlsConfig.Cert != "" && tlsConfig.Key != "" {
-		cert, err := tls.LoadX509KeyPair(tlsConfig.Cert, tlsConfig.Key)
-		if err != nil {
-			return err
-		}
-		cfg.Certificates = []tls.Certificate{cert}
-	}
-
-	if tlsConfig.RootCA != "" {
-		// Load custom CA if provided
-		// Implementation would depend on specific requirements
-	}
-
-	return nil
-}
+// removed unused helpers setRoutingKey and queueOrRk

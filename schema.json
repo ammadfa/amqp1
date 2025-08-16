@@ -64,8 +64,8 @@
                 },
                 "exchange": {
                   "type": "string",
-                  "description": "Exchange name",
-                  "default": "amqp1.default"
+                  "description": "Exchange name (empty string for default exchange)",
+                  "default": ""
                 },
                 "exchange_type": {
                   "type": "string",
