@@ -9,17 +9,6 @@ import (
 	"github.com/roadrunner-server/errors"
 )
 
-// ClientAuthType TLS auth type
-type ClientAuthType string
-
-const (
-	NoClientCert               ClientAuthType = "no_client_cert"
-	RequestClientCert          ClientAuthType = "request_client_cert"
-	RequireAnyClientCert       ClientAuthType = "require_any_client_cert"
-	VerifyClientCertIfGiven    ClientAuthType = "verify_client_cert_if_given"
-	RequireAndVerifyClientCert ClientAuthType = "require_and_verify_client_cert"
-)
-
 // pipeline amqp1 info
 const (
 	exchangeKey   string = "exchange"
@@ -40,18 +29,8 @@ const (
 	exchangeAutoDelete string = "exchange_auto_delete"
 	queueAutoDelete    string = "queue_auto_delete"
 
-	dlx           string = "x-dead-letter-exchange"
-	dlxRoutingKey string = "x-dead-letter-routing-key"
-	dlxTTL        string = "x-message-ttl"
-	dlxExpires    string = "x-expires"
-
 	// new in 2.12.2
 	queueHeaders string = "queue_headers"
-
-	// new in 2023.1.0
-	consumerIDKey string = "consumer_id"
-
-	contentType string = "application/octet-stream"
 )
 
 // config is used to parse pipeline configuration
@@ -61,6 +40,11 @@ type config struct {
 
 	// global TLS option
 	TLS *TLS `mapstructure:"tls"`
+
+	// SASL authentication for Azure Service Bus and other AMQP 1.0 brokers
+	Username string `mapstructure:"username"`
+	Password string `mapstructure:"password"`
+	SASLType string `mapstructure:"sasl_type"`
 
 	// local
 	Prefetch     int    `mapstructure:"prefetch"`
@@ -95,10 +79,10 @@ type config struct {
 
 // TLS configuration
 type TLS struct {
-	RootCA   string          `mapstructure:"root_ca"`
-	Key      string          `mapstructure:"key"`
-	Cert     string          `mapstructure:"cert"`
-	AuthType ClientAuthType  `mapstructure:"client_auth_type"`
+	RootCA             string          `mapstructure:"root_ca"`
+	Key                string          `mapstructure:"key"`
+	Cert               string          `mapstructure:"cert"`
+	InsecureSkipVerify bool            `mapstructure:"insecure_skip_verify"`
 	// auth type internal
 	auth tls.ClientAuthType
 }
@@ -110,9 +94,7 @@ func (c *config) InitDefault() error {
 		c.ExchangeType = "direct"
 	}
 
-	if c.Exchange == "" {
-		c.Exchange = "amqp1.default"
-	}
+	// Leave exchange empty for default exchange - don't set a default value
 
 	if c.RedialTimeout == 0 {
 		c.RedialTimeout = 60
@@ -169,20 +151,7 @@ func (c *config) InitDefault() error {
 			}
 
 			// auth type used only for the CA
-			switch c.TLS.AuthType {
-			case NoClientCert:
-				c.TLS.auth = tls.NoClientCert
-			case RequestClientCert:
-				c.TLS.auth = tls.RequestClientCert
-			case RequireAnyClientCert:
-				c.TLS.auth = tls.RequireAnyClientCert
-			case VerifyClientCertIfGiven:
-				c.TLS.auth = tls.VerifyClientCertIfGiven
-			case RequireAndVerifyClientCert:
-				c.TLS.auth = tls.RequireAndVerifyClientCert
-			default:
-				c.TLS.auth = tls.NoClientCert
-			}
+			c.TLS.auth = tls.NoClientCert
 		}
 	}
 

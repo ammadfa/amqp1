@@ -5,8 +5,8 @@ go 1.24
 toolchain go1.24.5
 
 require (
+	github.com/Azure/go-amqp v1.4.0
 	github.com/google/uuid v1.6.0
-	github.com/rabbitmq/rabbitmq-amqp-go-client v0.1.1
 	github.com/roadrunner-server/api/v4 v4.20.0
 	github.com/roadrunner-server/endure/v2 v2.6.2
 	github.com/roadrunner-server/errors v1.4.1
@@ -21,7 +21,6 @@ require (
 )
 
 require (
-	github.com/Azure/go-amqp v1.4.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

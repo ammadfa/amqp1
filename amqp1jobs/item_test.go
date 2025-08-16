@@ -28,7 +28,7 @@ func TestItemCreation(t *testing.T) {
 func TestPackUnpack(t *testing.T) {
 	priority := int64(5)
 	delay := int64(30)
-	
+
 	item := &Item{
 		job:     "test-job",
 		ident:   "test-id-123",
@@ -50,12 +50,34 @@ func TestPackUnpack(t *testing.T) {
 	assert.NotEmpty(t, headers)
 
 	// Verify packed headers contain expected values
-	assert.Equal(t, item.ident, headers[ujobID])
+	assert.Equal(t, item.ident, headers["id"])
 	assert.Equal(t, item.job, headers["job"])
 	assert.Equal(t, priority, headers["priority"])
 	assert.Equal(t, "test-pipeline", headers["pipeline"])
 	assert.Equal(t, true, headers["auto_ack"])
-	assert.Equal(t, "custom-value", headers["custom-header"])
+	// custom headers are stored under the nested headers map
+	if hm, ok := headers["headers"].(map[string][]string); ok {
+		if vals, ok := hm["custom-header"]; ok && len(vals) > 0 {
+			assert.Equal(t, "custom-value", vals[0])
+		} else {
+			t.Fatalf("custom-header missing in headers: %#v", hm)
+		}
+	} else if hm2, ok := headers["headers"].(map[string]interface{}); ok {
+		// fallback if representation is map[string]interface{} with string values
+		switch v := hm2["custom-header"].(type) {
+		case string:
+			assert.Equal(t, "custom-value", v)
+		case []interface{}:
+			if len(v) == 0 {
+				t.Fatalf("custom-header slice empty in headers: %#v", hm2)
+			}
+			assert.Equal(t, "custom-value", v[0])
+		default:
+			t.Fatalf("unexpected type for custom-header: %T (%#v)", v, v)
+		}
+	} else {
+		t.Fatalf("headers field missing or wrong type: %#v", headers["headers"])
+	}
 
 	// Unpack the headers
 	unpackedItem, err := unpack(headers)
