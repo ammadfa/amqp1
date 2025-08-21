@@ -45,8 +45,7 @@ func TestPackUnpack(t *testing.T) {
 	}
 
 	// Pack the item
-	headers, err := pack(item.ident, item)
-	assert.NoError(t, err)
+	headers := pack(item.ident, item)
 	assert.NotEmpty(t, headers)
 
 	// Verify packed headers contain expected values

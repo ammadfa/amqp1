@@ -208,7 +208,7 @@ func FromConfig(tracer *sdktrace.TracerProvider, configKey string, log *zap.Logg
 	jb.isRabbitMQ = !jb.isAzureServiceBus // Assume RabbitMQ if not Azure Service Bus
 
 	// Connect using pure AMQP 1.0 protocol
-	jb.conn, err = connectAMQP(conf.Addr, &conf)
+	jb.conn, err = connectAMQP(conf.Addr, &conf, log)
 	if err != nil {
 		return nil, errors.E(op, err)
 	}
@@ -338,7 +338,7 @@ func FromPipeline(tracer *sdktrace.TracerProvider, pipeline jobs.Pipeline, log *
 	jb.isRabbitMQ = !jb.isAzureServiceBus // Assume RabbitMQ if not Azure Service Bus
 
 	// Connect using pure AMQP 1.0 protocol
-	jb.conn, err = connectAMQP(conf.Addr, &conf)
+	jb.conn, err = connectAMQP(conf.Addr, &conf, log)
 	if err != nil {
 		return nil, errors.E(op, err)
 	}
@@ -596,50 +596,32 @@ func (d *Driver) Stop(ctx context.Context) error {
 
 // handleItem publishes message to AMQP 1.0 using pure Azure go-amqp
 func (d *Driver) handleItem(ctx context.Context, msg *Item) error {
-    const op = errors.Op("amqp1_driver_handle_item")
+	const op = errors.Op("amqp1_driver_handle_item")
 
-    if d.sender == nil {
-        return errors.E(op, errors.Str("sender not initialized"))
-    }
+	if d.sender == nil {
+		return errors.E(op, errors.Str("sender not initialized"))
+	}
 
-    d.prop.Inject(ctx, propagation.HeaderCarrier(msg.headers))
+	d.prop.Inject(ctx, propagation.HeaderCarrier(msg.headers))
 
-    // Build structured payload with header object and body
-    headerData, err := pack(msg.ident, msg)
-    if err != nil {
-        return errors.E(op, err)
-    }
+	// Pack job metadata and build structured payload
+	headerData := pack(msg.ident, msg)
+	payload := map[string]any{
+		"header": headerData,
+		"body":   string(msg.Body()),
+	}
 
-    payload := map[string]any{
-        "header": headerData,       // embed as object, not string
-        "body":   string(msg.Body()),
-    }
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return errors.E(op, err)
+	}
 
-    payloadJSON, err := json.Marshal(payload)
-    if err != nil {
-        return errors.E(op, err)
-    }
-
-    // Avoid logging full payloads; log sizes or ids instead
-    d.log.Debug("AMQP1 payload prepared",
-        zap.String("id", msg.ident),
-        zap.Int("headerKeys", len(headerData)),
-        zap.Int("payloadBytes", len(payloadJSON)),
-    )
-
-    // …continue with sending payloadJSON over d.sender…
-    if err := d.sender.Send(payloadJSON); err != nil {
-        return errors.E(op, err)
-    }
-
-    return nil
-}
-	// Create Azure AMQP message
+	// Build AMQP message
 	amqpMsg := &amqp.Message{
 		Data: [][]byte{payloadJSON},
 	}
 
-	// Convert headers to Azure AMQP format
+	// Convert headers to Azure AMQP application properties
 	if len(msg.headers) > 0 {
 		amqpMsg.ApplicationProperties = make(map[string]interface{})
 		for key, values := range msg.headers {
@@ -656,7 +638,7 @@ func (d *Driver) handleItem(ctx context.Context, msg *Item) error {
 		}
 		amqpMsg.ApplicationProperties["x-routing-key"] = d.routingKey
 		amqpMsg.Properties = &amqp.MessageProperties{
-			Subject: &d.routingKey, // Subject is used for routing in AMQP 1.0
+			Subject: &d.routingKey,
 		}
 	}
 
@@ -665,7 +647,6 @@ func (d *Driver) handleItem(ctx context.Context, msg *Item) error {
 		atomic.AddInt64(d.delayed, 1)
 
 		if d.isAzureServiceBus {
-			// Azure Service Bus uses scheduled messages for delays
 			scheduleTime := time.Now().Add(msg.Options.DelayDuration())
 			amqpMsg.Annotations = make(amqp.Annotations)
 			amqpMsg.Annotations["x-opt-scheduled-enqueue-time"] = scheduleTime
@@ -674,7 +655,6 @@ func (d *Driver) handleItem(ctx context.Context, msg *Item) error {
 				zap.Duration("delay", msg.Options.DelayDuration()),
 				zap.Time("scheduleTime", scheduleTime))
 		} else {
-			// RabbitMQ: use x-delay header (requires rabbitmq-delayed-message-exchange plugin)
 			delayMs := int64(msg.Options.DelayDuration().Seconds() * 1000)
 			if amqpMsg.ApplicationProperties == nil {
 				amqpMsg.ApplicationProperties = make(map[string]interface{})
@@ -688,17 +668,20 @@ func (d *Driver) handleItem(ctx context.Context, msg *Item) error {
 	}
 
 	// Send the message
-	err = d.sender.Send(ctx, amqpMsg, nil)
-	if err != nil {
+	if err := d.sender.Send(ctx, amqpMsg, nil); err != nil {
 		if msg.Options.DelayDuration() > 0 {
 			atomic.AddInt64(d.delayed, ^int64(0))
 		}
 		return errors.E(op, fmt.Errorf("failed to send message: %w", err))
 	}
 
+	// Avoid logging full payloads; log safe metadata
 	d.log.Debug("Message sent successfully",
 		zap.String("queue", d.queue),
-		zap.Bool("isAzureServiceBus", d.isAzureServiceBus))
+		zap.Bool("isAzureServiceBus", d.isAzureServiceBus),
+		zap.String("id", msg.ident),
+		zap.Int("headerKeys", len(headerData)),
+	)
 
 	return nil
 }
@@ -923,25 +906,29 @@ func (d *Driver) processMessage(message *amqp.Message) error {
 	// Debug: Log received payload
 	d.log.Debug("AMQP1 Received Payload", zap.String("payload", string(messageData)))
 
-	// Extract header and body
-	headerStr, ok := payload["header"].(string)
+	// Extract header and body — expect header as object
+	headerIface, ok := payload["header"]
 	if !ok {
 		return fmt.Errorf("payload missing header field")
 	}
 
-	bodyStr, ok := payload["body"].(string)
+	headerData, ok := headerIface.(map[string]interface{})
 	if !ok {
-		return fmt.Errorf("payload missing body field")
+		return fmt.Errorf("payload header must be an object")
 	}
 
-	// Debug: Log header before parsing
-	d.log.Debug("AMQP1 Header before parsing", zap.String("header", headerStr))
-
-	// Parse header JSON to get job metadata
-	var headerData map[string]interface{}
-	err = json.Unmarshal([]byte(headerStr), &headerData)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal header: %w", err)
+	// Extract body (may be string or nested JSON)
+	var bodyStr string
+	switch b := payload["body"].(type) {
+	case string:
+		bodyStr = b
+	default:
+		// try to marshal other types back to JSON string
+		if bb, err := json.Marshal(b); err == nil {
+			bodyStr = string(bb)
+		} else {
+			return fmt.Errorf("payload missing or invalid body field")
+		}
 	}
 
 	// Debug: Log parsed header data

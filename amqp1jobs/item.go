@@ -74,10 +74,7 @@ func (i *Item) Context() ([]byte, error) {
 	const op = errors.Op("amqp1_jobs_context")
 
 	// Pack job metadata for RoadRunner framework
-	headerData, err := pack(i.ident, i)
-	if err != nil {
-		return nil, errors.E(op, err)
-	}
+	headerData := pack(i.ident, i)
 
 	// Return JSON-encoded context for the framework
 	contextJSON, err := json.Marshal(headerData)
@@ -239,9 +236,7 @@ func fromJob(job jobs.Message) *Item {
 }
 
 // pack job metadata into AMQP 1.0 compatible headers
-func pack(id string, item *Item) (map[string]interface{}, error) {
-	const op = errors.Op("amqp1_pack_job")
-
+func pack(id string, item *Item) map[string]interface{} {
 	out := make(map[string]interface{})
 
 	// Required fields for Spiral framework
@@ -280,7 +275,7 @@ func pack(id string, item *Item) (map[string]interface{}, error) {
 		out["auto_ack"] = item.Options.AutoAck
 	}
 
-	return out, nil
+	return out
 }
 
 // unpack extracts job metadata from AMQP 1.0 headers
