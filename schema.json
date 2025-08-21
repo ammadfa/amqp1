@@ -30,16 +30,10 @@
               "type": "string",
               "description": "Path to client certificate file"
             },
-            "client_auth_type": {
-              "type": "string",
-              "enum": [
-                "no_client_cert",
-                "request_client_cert",
-                "require_any_client_cert",
-                "verify_client_cert_if_given",
-                "require_and_verify_client_cert"
-              ],
-              "default": "no_client_cert"
+            "insecure_skip_verify": {
+              "type": "boolean",
+              "default": false,
+              "description": "Skip server certificate verification (NOT recommended for production)"
             }
           }
         }
