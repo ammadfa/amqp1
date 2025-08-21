@@ -101,20 +101,17 @@ jobs:
 
 **RabbitMQ Requirements:**
 - Enable AMQP 1.0 plugin: `rabbitmq-plugins enable rabbitmq_amqp1_0`
-- Queues are auto-created if they don't exist
-- Supports traditional AMQP exchange/routing patterns
-
+- Queues and exchanges must be created ahead of time (AMQP 1.0 client does not declare them)
+- Supports exchange-based routing; ensure bindings are configured server-side
 ### TLS Configuration
 
-```yaml
 amqp1:
   addr: "amqps://guest:guest@127.0.0.1:5671/"
   tls:
     cert: "/path/to/cert.pem"
     key: "/path/to/key.pem"
     root_ca: "/path/to/ca.pem"
-    client_auth_type: "require_and_verify_client_cert"
-```
+    insecure_skip_verify: false
 
 ### Advanced Pipeline Configuration
 

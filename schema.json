@@ -9,8 +9,7 @@
         "addr": {
           "type": "string",
           "description": "AMQP 1.0 connection URL",
-          "default": "amqp://guest:guest@127.0.0.1:5672/"
-        },
+          "default": "amqp://127.0.0.1:5672/"
         "container_id": {
           "type": "string",
           "description": "Unique identifier for the AMQP container"

@@ -1,8 +1,8 @@
 module github.com/roadrunner-server/amqp1
 
-go 1.24
+go 1.23
 
-toolchain go1.24.5
+toolchain go1.23.5
 
 require (
 	github.com/Azure/go-amqp v1.4.0

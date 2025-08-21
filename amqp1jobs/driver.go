@@ -596,43 +596,44 @@ func (d *Driver) Stop(ctx context.Context) error {
 
 // handleItem publishes message to AMQP 1.0 using pure Azure go-amqp
 func (d *Driver) handleItem(ctx context.Context, msg *Item) error {
-	const op = errors.Op("amqp1_driver_handle_item")
+    const op = errors.Op("amqp1_driver_handle_item")
 
-	if d.sender == nil {
-		return errors.E(op, errors.Str("sender not initialized"))
-	}
+    if d.sender == nil {
+        return errors.E(op, errors.Str("sender not initialized"))
+    }
 
-	d.prop.Inject(ctx, propagation.HeaderCarrier(msg.headers))
+    d.prop.Inject(ctx, propagation.HeaderCarrier(msg.headers))
 
-	// Create RoadRunner-compatible payload structure
-	// Pack job metadata into header as JSON
-	headerData, err := pack(msg.ident, msg)
-	if err != nil {
-		return errors.E(op, err)
-	}
+    // Build structured payload with header object and body
+    headerData, err := pack(msg.ident, msg)
+    if err != nil {
+        return errors.E(op, err)
+    }
 
-	headerJSON, err := json.Marshal(headerData)
-	if err != nil {
-		return errors.E(op, err)
-	}
+    payload := map[string]any{
+        "header": headerData,       // embed as object, not string
+        "body":   string(msg.Body()),
+    }
 
-	// Debug: Log the header JSON being created
-	d.log.Debug("AMQP1 Job Header JSON", zap.String("header", string(headerJSON)))
+    payloadJSON, err := json.Marshal(payload)
+    if err != nil {
+        return errors.E(op, err)
+    }
 
-	// Create structured payload with header and body
-	payload := map[string]interface{}{
-		"header": string(headerJSON),
-		"body":   string(msg.Body()),
-	}
+    // Avoid logging full payloads; log sizes or ids instead
+    d.log.Debug("AMQP1 payload prepared",
+        zap.String("id", msg.ident),
+        zap.Int("headerKeys", len(headerData)),
+        zap.Int("payloadBytes", len(payloadJSON)),
+    )
 
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return errors.E(op, err)
-	}
+    // …continue with sending payloadJSON over d.sender…
+    if err := d.sender.Send(payloadJSON); err != nil {
+        return errors.E(op, err)
+    }
 
-	// Debug: Log the full payload
-	d.log.Debug("AMQP1 Full Payload JSON", zap.String("payload", string(payloadJSON)))
-
+    return nil
+}
 	// Create Azure AMQP message
 	amqpMsg := &amqp.Message{
 		Data: [][]byte{payloadJSON},
@@ -704,119 +705,117 @@ func (d *Driver) handleItem(ctx context.Context, msg *Item) error {
 
 // connectAMQP creates a pure AMQP 1.0 connection using Azure go-amqp library
 // Compatible with both Azure Service Bus and RabbitMQ
-func connectAMQP(addr string, conf *config) (*amqp.Conn, error) {
-	fmt.Printf("AMQP DEBUG: addr=%s, containerID=%s\n", addr, conf.ContainerID)
+func connectAMQP(addr string, conf *config, log *zap.Logger) (*amqp.Conn, error) {
+    if log == nil {
+        log = zap.NewNop()
+    }
+    log.Debug("amqp: connecting", zap.String("addr", addr), zap.String("container_id", conf.ContainerID))
 
-	// Parse the connection string to extract credentials and host
-	parsedURL, err := url.Parse(addr)
-	if err != nil {
-		fmt.Printf("AMQP ERROR: Failed to parse URL: %v\n", err)
-		return nil, fmt.Errorf("failed to parse connection URL: %w", err)
-	}
+    // Parse the connection string to extract credentials and host
+    parsedURL, err := url.Parse(addr)
+    if err != nil {
+        return nil, fmt.Errorf("failed to parse connection URL: %w", err)
+    }
 
-	// Extract credentials from URL
-	var username, password string
-	if parsedURL.User != nil {
-		username = parsedURL.User.Username()
-		password, _ = parsedURL.User.Password()
-		// URL decode the password
-		if decodedPassword, err := url.QueryUnescape(password); err == nil {
-			password = decodedPassword
-		}
-		fmt.Printf("AMQP DEBUG: Credentials extracted - username: %s\n", username)
-	}
+    // Extract credentials from URL
+    var username, password string
+    if parsedURL.User != nil {
+        username = parsedURL.User.Username()
+        password, _ = parsedURL.User.Password()
+        // URL decode the password
+        if decodedPassword, err := url.QueryUnescape(password); err == nil {
+            password = decodedPassword
+        }
+        log.Debug("amqp: credentials extracted (username only)", zap.String("username", username))
+    }
 
-	// Override with explicit config values if provided
-	if conf.Username != "" {
-		username = conf.Username
-	}
-	if conf.Password != "" {
-		password = conf.Password
-	}
+    // Override with explicit config values if provided
+    if conf.Username != "" {
+        username = conf.Username
+    }
+    if conf.Password != "" {
+        password = conf.Password
+    }
 
-	// Create clean host address without credentials
-	hostAddr := fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host)
-	fmt.Printf("AMQP DEBUG: Clean host address: %s\n", hostAddr)
+    // Create clean host address without credentials
+    hostAddr := fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host)
+    log.Debug("amqp: clean host address", zap.String("host", hostAddr))
 
-	// Detect broker type
-	isAzureServiceBus := strings.Contains(addr, "servicebus.windows.net")
-	isRabbitMQ := !isAzureServiceBus
+    // Detect broker type
+    isAzureServiceBus := strings.Contains(addr, "servicebus.windows.net")
+    isRabbitMQ := !isAzureServiceBus
+    log.Debug("amqp: broker detection",
+        zap.Bool("azure_service_bus", isAzureServiceBus),
+        zap.Bool("rabbitmq", isRabbitMQ),
+    )
 
-	fmt.Printf("AMQP DEBUG: Broker detection - Azure Service Bus: %v, RabbitMQ: %v\n", isAzureServiceBus, isRabbitMQ)
+    // Configure AMQP connection options
+    connOptions := &amqp.ConnOptions{}
 
-	// Configure Azure AMQP connection options
-	connOptions := &amqp.ConnOptions{}
+    // Set container ID if provided
+    if conf.ContainerID != "" {
+        connOptions.ContainerID = conf.ContainerID
+        log.Debug("amqp: container id set", zap.String("container_id", conf.ContainerID))
+    }
 
-	// Set container ID if provided
-	if conf.ContainerID != "" {
-		connOptions.ContainerID = conf.ContainerID
-		fmt.Printf("AMQP DEBUG: Container ID set: %s\n", conf.ContainerID)
-	}
+    // Configure SASL authentication
+    if username != "" && password != "" {
+        log.Debug("amqp: using SASL PLAIN")
+        connOptions.SASLType = amqp.SASLTypePlain(username, password)
+    }
 
-	// Configure SASL authentication
-	if username != "" && password != "" {
-		fmt.Printf("AMQP DEBUG: Configuring SASL PLAIN authentication\n")
-		connOptions.SASLType = amqp.SASLTypePlain(username, password)
-	}
+    // Configure TLS if using amqps
+    if strings.HasPrefix(parsedURL.Scheme, "amqps") {
+        log.Debug("amqp: configuring TLS")
+        tlsConfig := &tls.Config{
+            ServerName: parsedURL.Hostname(),
+            MinVersion: tls.VersionTLS12,
+        }
 
-	// Configure TLS if using amqps
-	if strings.HasPrefix(parsedURL.Scheme, "amqps") {
-		fmt.Printf("AMQP DEBUG: Configuring TLS\n")
-		tlsConfig := &tls.Config{
-			ServerName: parsedURL.Hostname(),
-		}
+        if conf.TLS != nil {
+            if conf.TLS.InsecureSkipVerify {
+                tlsConfig.InsecureSkipVerify = true
+                log.Warn("amqp: TLS verification disabled via config")
+            }
 
-		// Apply custom TLS configuration if provided
-		if conf.TLS != nil {
-			if conf.TLS.InsecureSkipVerify {
-				tlsConfig.InsecureSkipVerify = true
-				fmt.Printf("AMQP DEBUG: TLS verification disabled\n")
-			}
+            if conf.TLS.RootCA != "" {
+                caCert, err := os.ReadFile(conf.TLS.RootCA)
+                if err != nil {
+                    return nil, fmt.Errorf("failed to read CA certificate: %w", err)
+                }
+                rootCAPool := x509.NewCertPool()
+                if !rootCAPool.AppendCertsFromPEM(caCert) {
+                    return nil, fmt.Errorf("failed to parse CA certificate")
+                }
+                tlsConfig.RootCAs = rootCAPool
+                log.Debug("amqp: custom RootCA loaded")
+            }
 
-			if conf.TLS.RootCA != "" {
-				caCert, err := os.ReadFile(conf.TLS.RootCA)
-				if err != nil {
-					return nil, fmt.Errorf("failed to read CA certificate: %w", err)
-				}
-				rootCAPool := x509.NewCertPool()
-				if !rootCAPool.AppendCertsFromPEM(caCert) {
-					return nil, fmt.Errorf("failed to parse CA certificate")
-				}
-				tlsConfig.RootCAs = rootCAPool
-				fmt.Printf("AMQP DEBUG: Custom RootCA loaded\n")
-			}
+            if conf.TLS.Cert != "" && conf.TLS.Key != "" {
+                cert, err := tls.LoadX509KeyPair(conf.TLS.Cert, conf.TLS.Key)
+                if err != nil {
+                    return nil, fmt.Errorf("failed to load client certificate: %w", err)
+                }
+                tlsConfig.Certificates = []tls.Certificate{cert}
+                log.Debug("amqp: client certificate loaded")
+            }
+        }
 
-			if conf.TLS.Cert != "" && conf.TLS.Key != "" {
-				cert, err := tls.LoadX509KeyPair(conf.TLS.Cert, conf.TLS.Key)
-				if err != nil {
-					return nil, fmt.Errorf("failed to load client certificate: %w", err)
-				}
-				tlsConfig.Certificates = []tls.Certificate{cert}
-				fmt.Printf("AMQP DEBUG: Client certificate loaded\n")
-			}
-		} else if isRabbitMQ {
-			// For RabbitMQ, be more permissive with TLS in development
-			fmt.Printf("AMQP DEBUG: Using development TLS settings for RabbitMQ\n")
-			tlsConfig.InsecureSkipVerify = true
-		}
+        connOptions.TLSConfig = tlsConfig
+    }
 
-		connOptions.TLSConfig = tlsConfig
-	}
+    // Set hostname for proper TLS verification
+    connOptions.HostName = parsedURL.Hostname()
+    log.Debug("amqp: dialing")
 
-	// Set hostname for proper TLS verification
-	connOptions.HostName = parsedURL.Hostname()
+    // Create the connection
+    conn, err := amqp.Dial(context.Background(), hostAddr, connOptions)
+    if err != nil {
+        return nil, fmt.Errorf("failed to connect to AMQP broker: %w", err)
+    }
 
-	fmt.Printf("AMQP DEBUG: Connecting to AMQP broker...\n")
-
-	// Create the connection
-	conn, err := amqp.Dial(context.Background(), hostAddr, connOptions)
-	if err != nil {
-		fmt.Printf("AMQP ERROR: Connection failed: %v\n", err)
-		return nil, fmt.Errorf("failed to connect to AMQP broker: %w", err)
-	}
-
-	fmt.Printf("AMQP DEBUG: Connection successful\n")
-	return conn, nil
+    log.Debug("amqp: connection established")
+    return conn, nil
 }
 
 func (d *Driver) init() error {
