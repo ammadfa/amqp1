@@ -81,8 +81,10 @@ management.DeclareExchange(ctx, exchangeSpec)
 ### 5. Configuration Enhancements
 Added AMQP 1.0 specific configuration options:
 - `container_id`: Unique identifier for the AMQP container
-- `link_name`: Name for the AMQP link  
+- `link_name`: Name for the AMQP link
 - `source_filter`: Message filtering at the source
+
+Note: configuration keys in YAML/JSON use snake_case (e.g. `container_id`). In Go these map to struct fields using `mapstructure` tags (for example `ContainerID string `mapstructure:"container_id"``).
 
 ## Project Structure
 
@@ -118,7 +120,7 @@ Added AMQP 1.0 specific configuration options:
 - [x] Error handling and recovery
 - [x] Configuration validation
 
-### ✅ Advanced Features  
+### ✅ Advanced Features
 - [x] TLS/SSL support
 - [x] Message delays/scheduling
 - [x] Priority queues

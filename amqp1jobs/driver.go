@@ -27,6 +27,24 @@ import (
 	"go.uber.org/zap"
 )
 
+// sanitizeAddr removes userinfo from URLs so logs don't leak credentials.
+func sanitizeAddr(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	u.User = nil
+	return u.String()
+}
+
+// maskUser hides usernames in logs.
+func maskUser(u string) string {
+	if u == "" {
+		return ""
+	}
+	return "***"
+}
+
 const (
 	xRoutingKey        = "x-routing-key"
 	pluginName  string = "amqp1"
@@ -158,8 +176,8 @@ func FromConfig(tracer *sdktrace.TracerProvider, configKey string, log *zap.Logg
 		zap.String("routingKey", conf.RoutingKey),
 		zap.String("queue", conf.Queue),
 		zap.String("exchangeType", conf.ExchangeType),
-		zap.String("addr", conf.Addr),
-		zap.String("username", conf.Username),
+		zap.String("addr", sanitizeAddr(conf.Addr)),
+		zap.String("username", maskUser(conf.Username)),
 		zap.String("password", "***"),  // Don't log password in plain text
 		zap.String("containerID", conf.ContainerID))
 
@@ -692,7 +710,13 @@ func connectAMQP(addr string, conf *config, log *zap.Logger) (*amqp.Conn, error)
     if log == nil {
         log = zap.NewNop()
     }
-    log.Debug("amqp: connecting", zap.String("addr", addr), zap.String("container_id", conf.ContainerID))
+	// sanitize address for logs: only scheme://host (no userinfo)
+	parsedForLog, _ := url.Parse(addr)
+	hostAddr := addr
+	if parsedForLog != nil {
+		hostAddr = fmt.Sprintf("%s://%s", parsedForLog.Scheme, parsedForLog.Host)
+	}
+	log.Debug("amqp: connecting", zap.String("host", hostAddr), zap.String("container_id", conf.ContainerID))
 
     // Parse the connection string to extract credentials and host
     parsedURL, err := url.Parse(addr)
@@ -720,9 +744,9 @@ func connectAMQP(addr string, conf *config, log *zap.Logger) (*amqp.Conn, error)
         password = conf.Password
     }
 
-    // Create clean host address without credentials
-    hostAddr := fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host)
-    log.Debug("amqp: clean host address", zap.String("host", hostAddr))
+	// Create clean host address without credentials
+	hostAddr = fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host)
+	log.Debug("amqp: clean host address", zap.String("host", hostAddr))
 
     // Detect broker type
     isAzureServiceBus := strings.Contains(addr, "servicebus.windows.net")
@@ -837,10 +861,16 @@ func (d *Driver) init() error {
 		d.log.Debug("RabbitMQ: using named exchange", zap.String("exchange", d.exchangeName), zap.String("routingKey", d.routingKey))
 	}
 
+	// Fail fast if targetAddress is empty to provide a clear error
+	if strings.TrimSpace(targetAddress) == "" {
+		return fmt.Errorf("empty AMQP target address: queue=%q exchange=%q routingKey=%q", d.queue, d.exchangeName, d.routingKey)
+	}
+
 	d.sender, err = d.session.NewSender(context.Background(), targetAddress, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create AMQP sender: %w", err)
 	}
+
 
 	d.log.Debug("AMQP1 Driver initialized successfully",
 		zap.String("targetAddress", targetAddress),
@@ -903,8 +933,38 @@ func (d *Driver) processMessage(message *amqp.Message) error {
 		return fmt.Errorf("failed to unmarshal message payload: %w", err)
 	}
 
-	// Debug: Log received payload
-	d.log.Debug("AMQP1 Received Payload", zap.String("payload", string(messageData)))
+	// Debug: Log received payload metadata (avoid logging raw payload to prevent PII leakage)
+	payloadSize := len(messageData)
+	var msgID string
+	var subject string
+	var seqStr string
+	var enqueued string
+	if message != nil {
+		if message.Properties != nil {
+			if message.Properties.MessageID != nil {
+				msgID = fmt.Sprintf("%v", message.Properties.MessageID)
+			}
+			if message.Properties.Subject != nil {
+				subject = *message.Properties.Subject
+			}
+		}
+		if message.Annotations != nil {
+			if v, ok := message.Annotations["x-opt-sequence-number"]; ok {
+				seqStr = fmt.Sprintf("%v", v)
+			}
+			if v, ok := message.Annotations["x-opt-enqueued-time"]; ok {
+				enqueued = fmt.Sprintf("%v", v)
+			}
+		}
+	}
+
+	d.log.Debug("AMQP1 Received Payload",
+		zap.Int("payloadSize", payloadSize),
+		zap.String("messageID", msgID),
+		zap.String("subject", subject),
+		zap.String("sequence", seqStr),
+		zap.String("enqueued", enqueued),
+	)
 
 	// Extract header and body — expect header as object
 	headerIface, ok := payload["header"]
@@ -931,9 +991,13 @@ func (d *Driver) processMessage(message *amqp.Message) error {
 		}
 	}
 
-	// Debug: Log parsed header data
-	headerDataJSON, _ := json.Marshal(headerData)
-	d.log.Debug("AMQP1 Parsed Header Data", zap.String("headerData", string(headerDataJSON)))
+	// Debug: Log parsed header metadata (do not log header contents to avoid PII)
+	d.log.Debug("AMQP1 Parsed Header",
+		zap.Int("headerKeys", len(headerData)),
+		zap.Int("payloadSize", payloadSize),
+		zap.String("messageID", msgID),
+		zap.String("subject", subject),
+	)
 
 	// Unpack job metadata using existing unpack function
 	item, err := unpack(headerData)

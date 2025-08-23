@@ -72,6 +72,8 @@ jobs:
 - TLS is automatically enabled with `amqps://` protocol
 - Routing occurs directly to queue (no exchanges)
 
+Note: the configuration key is `container_id` (snake_case) in YAML/JSON. In Go code this maps to the `ContainerID` struct field via `mapstructure:"container_id"`.
+
 ### RabbitMQ Configuration
 
 ```yaml
