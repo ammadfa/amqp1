@@ -294,7 +294,7 @@ The driver implements comprehensive error handling:
 
 ### AMQP1 Driver Sequence Diagram
 
-![amqp1 driver sequence diagram](amqp1/diagram-coderabbit.svg)
+![amqp1 driver sequence diagram](./diagram-coderabbit.svg)
 
 The diagram shows the high-level lifecycle for publishing and consuming jobs via the `amqp1` driver. For fixed routes prefer creating a sender with a v2 target address; for variable routing set `Properties.To` on each message. Subject-based routing is deprecated — prefer AMQP address (v2) / `Properties.To` as shown above.
 
