@@ -62,8 +62,7 @@ jobs:
         priority: 1
         durable: false
         exclusive: false
-        multiple_ack: false
-        requeue_on_fail: false
+  # Broker ack/requeue behavior should be configured on the broker or handled by the application
 ```
 
 **Azure Service Bus Requirements:**
@@ -97,8 +96,7 @@ jobs:
         priority: 10
         durable: true
         exclusive: false
-        multiple_ack: false
-        requeue_on_fail: true
+  # Broker ack/requeue behavior should be configured on the broker or handled by the application
 ```
 
 **RabbitMQ Requirements:**
@@ -129,10 +127,7 @@ jobs:
         prefetch: 50
         priority: 5
 
-        # Azure Service Bus specific headers
-        queue_headers:
-          max-delivery-count: 10
-          default-message-ttl: 3600000
+  # Azure Service Bus specific headers are managed server-side (use Azure portal/CLI)
 
     advanced-rabbit:
       driver: amqp1
@@ -145,16 +140,9 @@ jobs:
         priority: 5
         durable: true
         exclusive: false
-        multiple_ack: false
-        requeue_on_fail: true
+  # Broker ack/requeue behavior should be configured on the broker or handled by the application
 
-        # RabbitMQ specific settings
-        exchange_durable: true                # informational; server-side config
-        exchange_auto_delete: false           # informational
-        queue_auto_delete: false              # informational
-        queue_headers:
-          x-max-length: 1000
-          x-message-ttl: 3600000
+  # RabbitMQ-specific exchange/queue properties are informational and configured on the broker
 ```
 
 ## Implementation Details
@@ -277,7 +265,7 @@ for {
 The driver implements comprehensive error handling:
 
 - **Connection Resilience**: Automatic reconnection with exponential backoff
-- **Message Processing**: Configurable requeue/reject behavior via `requeue_on_fail`
+- **Message Processing**: Requeue/reject behavior should be implemented by the consumer application or configured on the broker; the driver will call the appropriate AMQP settlement methods.
 - **TLS Validation**: Certificate validation for secure connections
 - **Resource Cleanup**: Graceful shutdown of sessions and connections
 - **Broker Compatibility**: Fallback mechanisms for broker-specific features

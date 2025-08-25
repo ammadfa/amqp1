@@ -139,8 +139,8 @@ Note: Pure AMQP 1.0 clients (including `github.com/Azure/go-amqp` and broker AMQ
 ### 5. Configuration Enhancements
 Added AMQP 1.0 specific configuration options:
 - `container_id`: Unique identifier for the AMQP container
-- `link_name`: Name for the AMQP link
-- `source_filter`: Message filtering at the source
+
+Note: Broker-specific properties such as link names, source filters, exchange/queue durability and headers are typically managed on the broker side and are not applied by this client driver. Configure those on the broker (management UI/CLI/API) as needed.
 
 Note: configuration keys in YAML/JSON use snake_case (e.g., `container_id`). In Go these map via `mapstructure` tags, for example:
 ```go

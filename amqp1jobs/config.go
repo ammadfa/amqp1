@@ -18,19 +18,10 @@ const (
 	prefetch      string = "prefetch"
 	exclusive     string = "exclusive"
 	durable       string = "durable"
-	deleteOnStop  string = "delete_queue_on_stop"
 	priority      string = "priority"
-	multipleAck   string = "multiple_ack"
-	requeueOnFail string = "requeue_on_fail"
 
 	// new in 2.12
 	redialTimeout      string = "redial_timeout"
-	exchangeDurable    string = "exchange_durable"
-	exchangeAutoDelete string = "exchange_auto_delete"
-	queueAutoDelete    string = "queue_auto_delete"
-
-	// new in 2.12.2
-	queueHeaders string = "queue_headers"
 )
 
 // config is used to parse pipeline configuration
@@ -44,7 +35,6 @@ type config struct {
 	// SASL authentication for Azure Service Bus and other AMQP 1.0 brokers
 	Username string `mapstructure:"username"`
 	Password string `mapstructure:"password"`
-	SASLType string `mapstructure:"sasl_type"`
 
 	// local
 	Prefetch     int    `mapstructure:"prefetch"`
@@ -56,25 +46,12 @@ type config struct {
 	RoutingKey        string `mapstructure:"routing_key"`
 	Exclusive         bool   `mapstructure:"exclusive"`
 	Durable           bool   `mapstructure:"durable"`
-	DeleteQueueOnStop bool   `mapstructure:"delete_queue_on_stop"`
-	MultipleAck       bool   `mapstructure:"multiple_ack"`
-	RequeueOnFail     bool   `mapstructure:"requeue_on_fail"`
 
 	// new in 2.12.1
-	ExchangeDurable    bool `mapstructure:"exchange_durable"`
-	ExchangeAutoDelete bool `mapstructure:"exchange_auto_delete"`
-	QueueAutoDelete    bool `mapstructure:"queue_auto_delete"`
-	RedialTimeout      int  `mapstructure:"redial_timeout"`
-
-	// new in 2.12.2
-	QueueHeaders map[string]any `mapstructure:"queue_headers"`
-	// new in 2023.1.0
-	ConsumerID string `mapstructure:"consumer_id"`
+	RedialTimeout int `mapstructure:"redial_timeout"`
 
 	// AMQP 1.0 specific options
-	ContainerID  string `mapstructure:"container_id"`
-	LinkName     string `mapstructure:"link_name"`
-	SourceFilter string `mapstructure:"source_filter"`
+	ContainerID string `mapstructure:"container_id"`
 }
 
 // TLS configuration
@@ -112,16 +89,8 @@ func (c *config) InitDefault() error {
 		c.Addr = "amqp://guest:guest@127.0.0.1:5672/"
 	}
 
-	if c.ConsumerID == "" {
-		c.ConsumerID = fmt.Sprintf("roadrunner-%s", uuid.NewString())
-	}
-
 	if c.ContainerID == "" {
 		c.ContainerID = fmt.Sprintf("roadrunner-amqp1-%s", uuid.NewString())
-	}
-
-	if c.LinkName == "" {
-		c.LinkName = fmt.Sprintf("amqp1-link-%s", uuid.NewString())
 	}
 
 	if c.enableTLS() {

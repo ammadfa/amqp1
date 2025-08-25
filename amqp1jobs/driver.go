@@ -84,7 +84,6 @@ type Driver struct {
 
 	connStr     string
 	containerID string
-	linkName    string
 
 	retryTimeout      time.Duration
 	prefetch          int
@@ -94,21 +93,8 @@ type Driver struct {
 	exclusive         bool
 	exchangeType      string
 	routingKey        string
-	multipleAck       bool
-	requeueOnFail     bool
 	durable           bool
-	deleteQueueOnStop bool
 
-	// new in 2.12
-	exchangeDurable    bool
-	exchangeAutoDelete bool
-	queueAutoDelete    bool
-
-	// new in 2.12.2
-	queueHeaders map[string]any
-
-	// AMQP 1.0 specific
-	sourceFilter string
 
 	listeners uint32
 	delayed   *int64
@@ -194,31 +180,20 @@ func FromConfig(tracer *sdktrace.TracerProvider, configKey string, log *zap.Logg
 		eventBus: eventBus,
 		id:       id,
 
-		priority:    conf.Priority,
-		delayed:     ptrTo(int64(0)),
-		containerID: conf.ContainerID,
-		linkName:    conf.LinkName,
+	priority:    conf.Priority,
+	delayed:     ptrTo(int64(0)),
+	containerID: conf.ContainerID,
 
-		routingKey:        conf.RoutingKey,
-		queue:             conf.Queue,
-		durable:           conf.Durable,
-		exchangeType:      conf.ExchangeType,
-		deleteQueueOnStop: conf.DeleteQueueOnStop,
-		exchangeName:      conf.Exchange,
-		prefetch:          conf.Prefetch,
-		exclusive:         conf.Exclusive,
-		multipleAck:       conf.MultipleAck,
-		requeueOnFail:     conf.RequeueOnFail,
+	routingKey:   conf.RoutingKey,
+	queue:        conf.Queue,
+	durable:      conf.Durable,
+	exchangeType: conf.ExchangeType,
+	exchangeName: conf.Exchange,
+	prefetch:     conf.Prefetch,
+	exclusive:    conf.Exclusive,
 
-		// 2.12
-		retryTimeout:       time.Duration(conf.RedialTimeout) * time.Second,
-		exchangeAutoDelete: conf.ExchangeAutoDelete,
-		exchangeDurable:    conf.ExchangeDurable,
-		queueAutoDelete:    conf.QueueAutoDelete,
-		// 2.12.2
-		queueHeaders: conf.QueueHeaders,
-		// AMQP 1.0 specific
-		sourceFilter: conf.SourceFilter,
+	// 2.12
+	retryTimeout: time.Duration(conf.RedialTimeout) * time.Second,
 	}
 
 	// Detect connection type and initialize accordingly
@@ -316,40 +291,18 @@ func FromPipeline(tracer *sdktrace.TracerProvider, pipeline jobs.Pipeline, log *
 		exchangeName:      pipeline.String(exchangeKey, ""),
 		prefetch:          prf,
 		priority:          int64(pipeline.Int(priority, 10)),
-		durable:           pipeline.Bool(durable, false),
-		deleteQueueOnStop: pipeline.Bool(deleteOnStop, false),
-		exclusive:         pipeline.Bool(exclusive, false),
-		multipleAck:       pipeline.Bool(multipleAck, false),
-		requeueOnFail:     pipeline.Bool(requeueOnFail, false),
+	durable:           pipeline.Bool(durable, false),
+	exclusive:          pipeline.Bool(exclusive, false),
 
 		// new in 2.12
-		retryTimeout:       time.Duration(pipeline.Int(redialTimeout, 60)) * time.Second,
-		exchangeAutoDelete: pipeline.Bool(exchangeAutoDelete, false),
-		exchangeDurable:    pipeline.Bool(exchangeDurable, false),
-		queueAutoDelete:    pipeline.Bool(queueAutoDelete, false),
+		retryTimeout: time.Duration(pipeline.Int(redialTimeout, 60)) * time.Second,
 
-		// 2.12.2
-		queueHeaders: nil,
-
-		// containers and links
+		// containers
 		containerID: conf.ContainerID,
-		linkName:    conf.LinkName,
 
-		// AMQP 1.0 specific
-		sourceFilter: pipeline.String("source_filter", ""),
 	}
 
-	v := pipeline.String(queueHeaders, "")
-	if v != "" {
-		var tp map[string]any
-		err = json.Unmarshal([]byte(v), &tp)
-		if err != nil {
-			log.Warn("failed to unmarshal headers", zap.String("value", v))
-			return nil, err
-		}
-
-		jb.queueHeaders = tp
-	}
+	// queue headers not used by the current driver implementation
 
 	// Detect connection type and initialize accordingly
 	jb.isAzureServiceBus = strings.Contains(conf.Addr, "servicebus.windows.net")

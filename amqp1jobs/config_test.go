@@ -52,9 +52,7 @@ func TestConfigInitDefault(t *testing.T) {
 			assert.Equal(t, tt.expected.Prefetch, tt.config.Prefetch)
 			assert.Equal(t, tt.expected.Priority, tt.config.Priority)
 			assert.Equal(t, tt.expected.Addr, tt.config.Addr)
-			assert.NotEmpty(t, tt.config.ConsumerID)
 			assert.NotEmpty(t, tt.config.ContainerID)
-			assert.NotEmpty(t, tt.config.LinkName)
 		})
 	}
 }

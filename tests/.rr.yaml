@@ -20,7 +20,7 @@ server:
 amqp1:
   addr: "amqp://guest:guest@127.0.0.1:5672/"
   container_id: "roadrunner-amqp1"
-  
+
   # Optional TLS configuration
   # tls:
   #   cert: "/path/to/cert.pem"
@@ -54,8 +54,8 @@ jobs:
       prefetch: 10
       priority: 10
       durable: true
-      exchange_durable: true
-      
+  # exchange_durable: true  # exchange durability is managed on the broker
+
     # File processing pipeline with advanced settings
     files:
       driver: amqp1
@@ -63,48 +63,32 @@ jobs:
       exchange: "files-exchange"
       exchange_type: "topic"
       routing_key: "files.#"
-      prefetch: 5
-      priority: 5
-      durable: true
-      exclusive: false
-      multiple_ack: false
-      requeue_on_fail: true
-      delete_queue_on_stop: false
-      
-      # AMQP 1.0 specific settings
-      link_name: "files-link"
-      source_filter: "file-type = 'image'"
-      
-      # Exchange settings
-      exchange_durable: true
-      exchange_auto_delete: false
-      
-      # Queue settings
-      queue_auto_delete: false
-      queue_headers:
-        x-max-length: 1000
-        x-message-ttl: 3600000
-      
-      # Connection settings
-      redial_timeout: 60
-      
+  prefetch: 5
+  priority: 5
+  durable: true
+  exclusive: false
+
+  # Exchange settings
+  # (Exchange/queue durability and auto-delete are configured on the broker)
+
+  # Connection settings
+  redial_timeout: 60
+
     # High-priority notifications pipeline
     notifications:
       driver: amqp1
       queue: "notifications"
       exchange: "notifications-exchange"
       exchange_type: "fanout"
-      prefetch: 20
-      priority: 15
-      durable: true
-      exchange_durable: true
-      consumer_id: "notifications-consumer"
+  prefetch: 20
+  priority: 15
+  durable: true
 
 # HTTP configuration for management/monitoring
 http:
   address: "0.0.0.0:8080"
   middleware: ["gzip"]
-  
+
   pool:
     num_workers: 2
     allocate_timeout: 60s
