@@ -21,23 +21,68 @@ conn, err := amqp.Dial(addr)
 ch, err := conn.Channel()
 
 // AMQP 1.0 using github.com/Azure/go-amqp
-// Dial with context and connection options
-conn, err := amqp.Dial(context.Background(), addr, &amqp.ConnOptions{
+// Dial with context and connection options (go-amqp v1)
+ctx := context.TODO()
+conn, err := amqp.Dial(ctx, addr, &amqp.ConnOptions{
   ContainerID: "my-container",
   TLSConfig:   tlsConfig,
 })
-defer conn.Close(context.Background())
+if err != nil { /* handle */ }
+defer conn.Close(ctx)
 
 // Create a session
-session, err := conn.NewSession()
+session, err := conn.NewSession(ctx, nil)
+if err != nil { /* handle */ }
+defer session.Close()
 
 // Create sender and receiver using go-amqp v1 signatures
+// For fixed routing create a sender with a v2 target address (e.g. "/exchanges/<exchange>/<routing-key>")
 sender, err := session.NewSender("queue-or-exchange", &amqp.SenderOptions{
   // configure sender options here
 })
 receiver, err := session.NewReceiver("queue-or-address", &amqp.ReceiverOptions{
   Credit: int32(prefetch),
 })
+
+### AMQP1 Driver Sequence Diagram
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant App as Publisher App
+  participant RR as RoadRunner (amqp1 Driver)
+  participant Conn as AMQP Connection
+  participant Sess as AMQP Session
+  participant Sndr as AMQP Sender
+  participant Broker as Broker (RabbitMQ / Azure SB)
+  participant Rcvr as AMQP Receiver
+  participant Worker as Consumer/Worker
+
+  %% Publish flow
+  App->>RR: push(job)
+  RR->>Conn: ensure connected (dial / reconnect)
+  RR->>Sess: ensure session
+  RR->>Sndr: prepare message (ApplicationProperties, Properties.To optional)
+  Sndr->>Broker: send(message)
+
+  %% Broker -> consumer flow
+  Broker->>Rcvr: deliver(message)
+  Rcvr->>RR: receive(msg)
+  RR->>Worker: dispatch job to consumer
+  Worker-->>RR: result (ack / nack / retry)
+  alt success
+    RR->>Rcvr: AcceptMessage(msg)
+  else retry
+    RR->>Rcvr: RejectMessage(msg, nil) or ReleaseMessage(msg)
+  end
+
+  %% Notes
+  note right of RR: Routing options
+  note right of RR: - Fixed routing: sender target = "/exchanges/<exchange>/<routing-key>"
+  note right of RR: - Variable routing: sender target = empty; set message.Properties.To = "/exchanges/<exchange>/<routing-key>"
+```
+
+The diagram illustrates the high-level lifecycle for publishing and consuming jobs via the `amqp1` driver. For fixed routes prefer creating a sender with a v2 target address; for variable routing set `Properties.To` on each message. Subject-based routing is deprecated — prefer AMQP address (v2) / `Properties.To`.
 ```
 
 #### Message Publishing

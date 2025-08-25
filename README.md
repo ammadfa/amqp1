@@ -292,6 +292,46 @@ The driver implements comprehensive error handling:
 
 ## Usage Examples
 
+### AMQP1 Driver Sequence Diagram
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant App as Publisher App
+  participant RR as RoadRunner (amqp1 Driver)
+  participant Conn as AMQP Connection
+  participant Sess as AMQP Session
+  participant Sndr as AMQP Sender
+  participant Broker as Broker (RabbitMQ / Azure SB)
+  participant Rcvr as AMQP Receiver
+  participant Worker as Consumer/Worker
+
+  %% Publish flow
+  App->>RR: push(job)
+  RR->>Conn: ensure connected (dial / reconnect)
+  RR->>Sess: ensure session
+  RR->>Sndr: prepare message (ApplicationProperties, Properties.To optional)
+  Sndr->>Broker: send(message)
+
+  %% Broker -> consumer flow
+  Broker->>Rcvr: deliver(message)
+  Rcvr->>RR: receive(msg)
+  RR->>Worker: dispatch job to consumer
+  Worker-->>RR: result (ack / nack / retry)
+  alt success
+    RR->>Rcvr: AcceptMessage(msg)
+  else retry
+    RR->>Rcvr: RejectMessage(msg, nil) or ReleaseMessage(msg)
+  end
+
+  %% Notes
+  note right of RR: Routing options
+  note right of RR: - Fixed routing: sender target = "/exchanges/<exchange>/<routing-key>"
+  note right of RR: - Variable routing: sender target = empty; set message.Properties.To = "/exchanges/<exchange>/<routing-key>"
+```
+
+The diagram shows the high-level lifecycle for publishing and consuming jobs via the `amqp1` driver. For fixed routes prefer creating a sender with a v2 target address; for variable routing set `Properties.To` on each message. Subject-based routing is deprecated — prefer AMQP address (v2) / `Properties.To` as shown above.
+
 ### Publishing Jobs to Azure Service Bus
 
 ```php
