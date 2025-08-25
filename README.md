@@ -294,41 +294,7 @@ The driver implements comprehensive error handling:
 
 ### AMQP1 Driver Sequence Diagram
 
-```mermaid
-sequenceDiagram
-  autonumber
-  participant App as Publisher App
-  participant RR as RoadRunner (amqp1 Driver)
-  participant Conn as AMQP Connection
-  participant Sess as AMQP Session
-  participant Sndr as AMQP Sender
-  participant Broker as Broker (RabbitMQ / Azure SB)
-  participant Rcvr as AMQP Receiver
-  participant Worker as Consumer/Worker
-
-  %% Publish flow
-  App->>RR: push(job)
-  RR->>Conn: ensure connected (dial / reconnect)
-  RR->>Sess: ensure session
-  RR->>Sndr: prepare message (ApplicationProperties, Properties.To optional)
-  Sndr->>Broker: send(message)
-
-  %% Broker -> consumer flow
-  Broker->>Rcvr: deliver(message)
-  Rcvr->>RR: receive(msg)
-  RR->>Worker: dispatch job to consumer
-  Worker-->>RR: result (ack / nack / retry)
-  alt success
-    RR->>Rcvr: AcceptMessage(msg)
-  else retry
-    RR->>Rcvr: RejectMessage(msg, nil) or ReleaseMessage(msg)
-  end
-
-  %% Notes
-  note right of RR: Routing options
-  note right of RR: - Fixed routing: sender target = "/exchanges/<exchange>/<routing-key>"
-  note right of RR: - Variable routing: sender target = empty; set message.Properties.To = "/exchanges/<exchange>/<routing-key>"
-```
+![amqp1 driver sequence diagram](amqp1/diagram-coderabbit.svg)
 
 The diagram shows the high-level lifecycle for publishing and consuming jobs via the `amqp1` driver. For fixed routes prefer creating a sender with a v2 target address; for variable routing set `Properties.To` on each message. Subject-based routing is deprecated — prefer AMQP address (v2) / `Properties.To` as shown above.
 
@@ -395,102 +361,7 @@ while ($task = $consumer->waitTask()) {
 }
 ```
 
-## Migration Guide
 
-### From RabbitMQ AMQP 0-9-1 Client
-
-**Before** (RabbitMQ-specific):
-```yaml
-jobs:
-  pipelines:
-    rabbit-legacy:
-      driver: amqp
-      addr: "amqp://guest:guest@rabbitmq:5672/"
-      # AMQP 0-9-1 specific options
-```
-
-**After** (Pure AMQP 1.0):
-```yaml
-amqp1:
-  addr: "amqp://guest:guest@rabbitmq:5672/"
-  container_id: "roadrunner-amqp1"
-
-jobs:
-  pipelines:
-    rabbit-modern:
-      driver: amqp1
-      config:
-        queue: "same-queue-name"
-        # AMQP 1.0 benefits: better performance, standardized protocol
-```
-
-### From Azure Service Bus SDKs
-
-**Before** (Azure SDK):
-```yaml
-# Custom Azure Service Bus implementation
-azure:
-  connection_string: "Endpoint=sb://..."
-```
-
-**After** (Pure AMQP 1.0):
-```yaml
-amqp1:
-  addr: "amqps://RootManageSharedAccessKey:key@namespace.servicebus.windows.net:5671/"
-  container_id: "roadrunner-azure"
-
-jobs:
-  pipelines:
-    azure-queue:
-      driver: amqp1
-      config:
-        queue: "existing-queue"
-### Migration Benefits
-
-**Performance Improvements:**
-- Pure AMQP 1.0 protocol implementation
-- Reduced memory footprint without heavy client libraries
-- Better connection management and session reuse
-- Optimized message serialization/deserialization
-
-**Compatibility Advantages:**
-- Single codebase for multiple brokers (Azure Service Bus, RabbitMQ)
-- Standardized AMQP 1.0 protocol ensures consistent behavior
-- No vendor-specific client library dependencies
-- Future-proof against broker-specific API changes
-
-**Configuration Simplification:**
-- Unified configuration format for all AMQP 1.0 brokers
-- Automatic broker detection and adaptation
-- Consistent job handling across different message brokers
-- Simplified deployment and maintenance
-
-### Breaking Changes
-
-**Configuration Structure:**
-```yaml
-# Old structure
-jobs:
-  pipelines:
-    my-queue:
-      driver: amqp1
-      queue: "test-queue"
-      exchange: "test-exchange"
-
-# New structure
-jobs:
-  pipelines:
-    my-queue:
-      driver: amqp1
-      config:              # Nested under 'config'
-        queue: "test-queue"
-        exchange: "test-exchange"
-```
-
-**Driver Registration:**
-- Driver name remains `amqp1`
-- Global `amqp1` configuration section now required
-- Pipeline configuration moved under `config` key
 
 **PHP Code:**
 - No changes required in PHP job publishing/consuming code
