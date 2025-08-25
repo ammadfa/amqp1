@@ -7,7 +7,7 @@ Successfully implemented an AMQP 1.0 driver for RoadRunner based on the existing
 
 ### 1. Library Migration
 - **From**: `github.com/rabbitmq/amqp091-go` (AMQP 0-9-1)
-- **To**: `github.com/rabbitmq/rabbitmq-amqp-go-client` (AMQP 1.0)
+- **To**: `github.com/Azure/go-amqp` (AMQP 1.0)
 
 ### 2. API Adaptations
 
@@ -16,14 +16,25 @@ Successfully implemented an AMQP 1.0 driver for RoadRunner based on the existing
 - **AMQP 1.0**: Environment → Connection → Management/Publisher/Consumer pattern
 
 ```go
-// AMQP 0-9-1
+// AMQP 0-9-1 (for reference)
 conn, err := amqp.Dial(addr)
 ch, err := conn.Channel()
 
-// AMQP 1.0
-env := amqp.NewEnvironment(addr, nil)
-conn, err := env.NewConnection(context.Background())
-publisher, err := conn.NewPublisher(context.Background(), address, nil)
+// AMQP 1.0 using github.com/Azure/go-amqp
+// Dial (with context and options)
+conn, err := amqp.Dial(context.Background(), addr, &amqp.ConnOptions{
+  ContainerID: "my-container",
+  TLSConfig:   tlsConfig,
+})
+
+// Create a session and sender/receiver
+session, err := conn.NewSession()
+sender, err := session.NewSender(&amqp.SenderOptions{
+  Target: &amqp.Target{Address: "queue-or-exchange"},
+})
+receiver, err := session.NewReceiver(&amqp.ReceiverOptions{
+  Source: &amqp.Source{Address: "queue-or-address"},
+})
 ```
 
 #### Message Publishing
@@ -35,44 +46,43 @@ publisher, err := conn.NewPublisher(context.Background(), address, nil)
 err := ch.Publish(exchange, routingKey, false, false, amqp.Publishing{...})
 
 // AMQP 1.0
-msg := amqp.NewMessage(data)
-result, err := publisher.Publish(ctx, msg)
-// Handle result.Outcome (StateAccepted, StateRejected, StateReleased)
+msg := &amqp.Message{
+    Data: [][]byte{data},
+}
++err := sender.Send(ctx, msg, nil) // handle error (accepted on nil error)
 ```
 
 #### Message Consumption
 - **AMQP 0-9-1**: Channel-based consumption with delivery channel
 - **AMQP 1.0**: Consumer-based with DeliveryContext
 
+deliveryContext.Accept(ctx)
 ```go
 // AMQP 0-9-1
 deliveries, err := ch.Consume(queue, consumerTag, false, false, false, false, nil)
 for delivery := range deliveries {
-    delivery.Ack(false)
+  delivery.Ack(false)
 }
 
-// AMQP 1.0
-consumer, err := conn.NewConsumer(ctx, queue, nil)
-deliveryContext, err := consumer.Receive(ctx)
-deliveryContext.Accept(ctx)
+// AMQP 1.0 using github.com/Azure/go-amqp
+for {
+  msg, err := receiver.Receive(ctx)
+  if err != nil {
+    // handle error
+    continue
+  }
+
+  // process message
+
+  // Acknowledge (settle) the message
+  if err := receiver.AcceptMessage(ctx, msg); err != nil {
+    // handle ack error
+  }
+}
 ```
 
 ### 3. Queue and Exchange Management
-- **AMQP 0-9-1**: QueueDeclare, ExchangeDeclare, QueueBind methods
-- **AMQP 1.0**: Management interface with specification-based declarations
-
-```go
-// AMQP 0-9-1
-ch.QueueDeclare(name, durable, autoDelete, exclusive, false, args)
-ch.ExchangeDeclare(name, type, durable, autoDelete, false, false, args)
-
-// AMQP 1.0
-queueSpec := &amqp.QuorumQueueSpecification{Name: name}
-management.DeclareQueue(ctx, queueSpec)
-
-exchangeSpec := &amqp.DirectExchangeSpecification{Name: name}
-management.DeclareExchange(ctx, exchangeSpec)
-```
+Note: Pure AMQP 1.0 clients (including `github.com/Azure/go-amqp` and broker AMQP 1.0 plugins) generally do not provide server-side resource declaration APIs. Queues, exchanges, and bindings must be provisioned using broker-specific management tools (management UI, CLI or HTTP/API) — for example: the RabbitMQ management UI or `rabbitmqctl`/HTTP API, or the Azure portal / Azure CLI for Service Bus. The client should assume resources already exist and only perform normal publish/consume operations.
 
 ### 4. Error Handling
 - **AMQP 0-9-1**: delivery.Ack()/Nack() with requeue parameter
@@ -189,8 +199,8 @@ $queue->push('email.send', ['to' => 'user@example.com'], ['priority' => 5]);
 - [ ] Performance benchmarking against AMQP 0-9-1
 
 ## Dependencies
-- Go 1.21+
-- `github.com/rabbitmq/rabbitmq-amqp-go-client` v0.1.1
+- Go 1.24+
+- `github.com/Azure/go-amqp` v1.4.0
 - RoadRunner API v4.20.0+
 - OpenTelemetry for tracing
 - Standard RoadRunner plugin ecosystem

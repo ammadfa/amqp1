@@ -92,7 +92,7 @@ jobs:
         queue: "test-queue"
         routing_key: "test"
         exchange: ""                          # Use default exchange
-        exchange_type: "direct"
+        exchange_type: "direct"               # informational; configure server-side
         prefetch: 10
         priority: 10
         durable: true
@@ -149,9 +149,9 @@ jobs:
         requeue_on_fail: true
 
         # RabbitMQ specific settings
-        exchange_durable: true
-        exchange_auto_delete: false
-        queue_auto_delete: false
+        exchange_durable: true                # informational; server-side config
+        exchange_auto_delete: false           # informational
+        queue_auto_delete: false              # informational
         queue_headers:
           x-max-length: 1000
           x-message-ttl: 3600000
@@ -187,13 +187,13 @@ defer session.Close()
 ```go
 // Automatic broker detection based on connection properties
 if d.isAzureServiceBus() {
-    // Azure Service Bus: Direct queue communication
-    receiver, err := session.NewReceiver(amqp.LinkAddress(queueName))
-    sender, err := session.NewSender(amqp.LinkAddress(queueName))
+    // Azure Service Bus: direct queue address
+    receiver, err := session.NewReceiver(ctx, queueName, &amqp.ReceiverOptions{Credit: int32(prefetch)})
+    sender,   err := session.NewSender(ctx, queueName, nil)
 } else {
-    // RabbitMQ: Traditional exchange/routing
-    receiver, err := session.NewReceiver(amqp.LinkAddress(queueName))
-    sender, err := session.NewSender(amqp.LinkAddress(""))
+    // RabbitMQ (AMQP 1.0 plugin): subject carries routing key; target can be empty for default exchange semantics
+    receiver, err := session.NewReceiver(ctx, queueName, &amqp.ReceiverOptions{Credit: int32(prefetch)})
+    sender,   err := session.NewSender(ctx, "", nil) // default exchange; use Subject for routing
 }
 ```
 
@@ -211,7 +211,7 @@ if d.isAzureServiceBus() {
 } else {
     // Through exchange with routing key
     amqpMsg.Properties = &amqp.MessageProperties{
-        Subject: &routingKey,  // RabbitMQ routing key
+        Subject: &routingKey, // RabbitMQ routing key (used by the AMQP 1.0 plugin)
     }
     err := sender.Send(ctx, amqpMsg, nil)
 }
@@ -221,8 +221,8 @@ if d.isAzureServiceBus() {
 ```go
 // Unified consumption pattern
 receiver, err := session.NewReceiver(amqp.LinkTargetAddress(queueName), &amqp.ReceiverOptions{
-    Credit: int32(prefetch),
-    Manual: true,  // Manual acknowledgment
+  Credit: int32(prefetch),
+  // AMQP 1.0 uses credit-based flow control; manual settlement flags are not used here
 })
 
 for {

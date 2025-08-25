@@ -1,4 +1,6 @@
-.PHONY: test lint build clean install
+.PHONY: all test lint build clean install check help install-lint fmt vet deps update
+
+all: build
 
 # Go parameters
 GOCMD=go
@@ -7,10 +9,8 @@ GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 GOLINT=golangci-lint
-
-# Build parameters
-VERSION?=dev
-BUILD_TIME=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+GO_VER=1.24
+TOOLCHAIN=go1.24.6
 
 # Build the project
 build:
@@ -18,7 +18,10 @@ build:
 
 # Run tests
 test:
-	$(GOTEST) -v -race -coverprofile=coverage.out ./...
+	$(GOTEST) -v -coverprofile=coverage.out ./...
+
+test-race:
+	$(GOTEST) -v -race ./...
 
 # Run tests with coverage report
 test-coverage: test
@@ -46,7 +49,7 @@ clean:
 
 # Install golangci-lint
 install-lint:
- 	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(shell go env GOPATH)/bin v2.2.2
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(shell go env GOPATH)/bin v2.2.2
 
 # Format code
 fmt:

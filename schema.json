@@ -9,7 +9,8 @@
         "addr": {
           "type": "string",
           "description": "AMQP 1.0 connection URL",
-          "default": "amqp://127.0.0.1:5672/"
+          "default": "amqp://127.0.0.1:5672/",
+          "format": "uri"
         },
         "container_id": {
           "type": "string",
@@ -152,6 +153,10 @@
                 }
               },
               "required": ["driver"],
+              "oneOf": [
+                { "required": ["queue"] },
+                { "required": ["routing_key"] }
+              ],
               "additionalProperties": false
             }
           }
