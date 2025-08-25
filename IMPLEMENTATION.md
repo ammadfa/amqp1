@@ -21,19 +21,22 @@ conn, err := amqp.Dial(addr)
 ch, err := conn.Channel()
 
 // AMQP 1.0 using github.com/Azure/go-amqp
-// Dial (with context and options)
+// Dial with context and connection options
 conn, err := amqp.Dial(context.Background(), addr, &amqp.ConnOptions{
   ContainerID: "my-container",
   TLSConfig:   tlsConfig,
 })
+defer conn.Close(context.Background())
 
-// Create a session and sender/receiver
+// Create a session
 session, err := conn.NewSession()
-sender, err := session.NewSender(&amqp.SenderOptions{
-  Target: &amqp.Target{Address: "queue-or-exchange"},
+
+// Create sender and receiver using go-amqp v1 signatures
+sender, err := session.NewSender("queue-or-exchange", &amqp.SenderOptions{
+  // configure sender options here
 })
-receiver, err := session.NewReceiver(&amqp.ReceiverOptions{
-  Source: &amqp.Source{Address: "queue-or-address"},
+receiver, err := session.NewReceiver("queue-or-address", &amqp.ReceiverOptions{
+  Credit: int32(prefetch),
 })
 ```
 
@@ -66,7 +69,7 @@ for delivery := range deliveries {
 
 // AMQP 1.0 using github.com/Azure/go-amqp
 for {
-  msg, err := receiver.Receive(ctx)
+  msg, err := receiver.Receive(ctx, nil)
   if err != nil {
     // handle error
     continue
@@ -94,7 +97,12 @@ Added AMQP 1.0 specific configuration options:
 - `link_name`: Name for the AMQP link
 - `source_filter`: Message filtering at the source
 
-Note: configuration keys in YAML/JSON use snake_case (e.g. `container_id`). In Go these map to struct fields using `mapstructure` tags (for example `ContainerID string `mapstructure:"container_id"``).
+Note: configuration keys in YAML/JSON use snake_case (e.g., `container_id`). In Go these map via `mapstructure` tags, for example:
+```go
+type Conf struct {
+    ContainerID string `mapstructure:"container_id"`
+}
+```
 
 ## Project Structure
 
@@ -125,7 +133,7 @@ Note: configuration keys in YAML/JSON use snake_case (e.g. `container_id`). In G
 - [x] Connection management with environment pattern
 - [x] Message publishing with outcome tracking
 - [x] Message consumption with proper acknowledgment
-- [x] Queue and exchange declaration/management
+- [x] Assumes pre-provisioned resources (queues/exchanges/bindings must be provisioned via broker management tools)
 - [x] Pipeline lifecycle (Run, Pause, Resume, Stop)
 - [x] Error handling and recovery
 - [x] Configuration validation
@@ -166,13 +174,14 @@ jobs:
   pipelines:
     emails:
       driver: amqp1
-      queue: "emails"
-      exchange: "email-exchange"
-      exchange_type: "direct"
-      routing_key: "email.send"
-      prefetch: 10
-      priority: 10
-      durable: true
+      config:
+        queue: "emails"
+        exchange: "email-exchange"
+        exchange_type: "direct"
+        routing_key: "email.send"
+        prefetch: 10
+        priority: 10
+        durable: true
 ```
 
 ### Publishing (PHP)

@@ -1,4 +1,5 @@
 .PHONY: all test lint build clean install check help install-lint fmt vet deps update
+lint: install-lint
 
 all: build
 
@@ -9,8 +10,6 @@ GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 GOLINT=golangci-lint
-GO_VER=1.24
-TOOLCHAIN=go1.24.6
 
 # Build the project
 build:
@@ -28,7 +27,9 @@ test-coverage: test
 	$(GOCMD) tool cover -html=coverage.out -o coverage.html
 
 # Run linter
-lint:
+lint: ## Run golangci-lint (installs if missing)
+	@command -v $(GOLINT) >/dev/null 2>&1 || { \
+		echo "golangci-lint not found; run 'make install-lint' first"; exit 1; }
 	$(GOLINT) run ./...
 
 # Install dependencies

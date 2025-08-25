@@ -172,14 +172,17 @@ The driver consists of several key components:
 
 #### Connection Management
 ```go
-// Create AMQP 1.0 connection using pure Azure go-amqp library
-conn, err := amqp.NewConnection(addr, &amqp.ConnectionOptions{
-    ContainerID: conf.ContainerID,
-    TLSConfig:   tlsConfig,
+// Create AMQP 1.0 connection using Azure go-amqp v1
+ctx := context.TODO()
+conn, err := amqp.Dial(ctx, addr, &amqp.ConnOptions{
+  ContainerID: conf.ContainerID,
+  TLSConfig:   tlsConfig,
 })
+if err != nil { /* handle */ }
 
-// Unified session for both Azure Service Bus and RabbitMQ
-session, err := conn.NewSession()
+// Session (applies to all brokers)
+session, err := conn.NewSession(ctx, nil)
+if err != nil { /* handle */ }
 defer session.Close()
 ```
 
@@ -187,13 +190,19 @@ defer session.Close()
 ```go
 // Automatic broker detection based on connection properties
 if d.isAzureServiceBus() {
-    // Azure Service Bus: direct queue address
-    receiver, err := session.NewReceiver(ctx, queueName, &amqp.ReceiverOptions{Credit: int32(prefetch)})
-    sender,   err := session.NewSender(ctx, queueName, nil)
+  // Azure Service Bus: direct queue address
+  receiver, err := session.NewReceiver(context.Background(), queueName, &amqp.ReceiverOptions{Credit: int32(prefetch)})
+  sender,   err := session.NewSender(context.Background(), queueName, nil)
 } else {
-    // RabbitMQ (AMQP 1.0 plugin): subject carries routing key; target can be empty for default exchange semantics
-    receiver, err := session.NewReceiver(ctx, queueName, &amqp.ReceiverOptions{Credit: int32(prefetch)})
-    sender,   err := session.NewSender(ctx, "", nil) // default exchange; use Subject for routing
+  // RabbitMQ (AMQP 1.0 plugin): prefer AMQP v2 address targets or per-message Properties.To for routing.
+  // Fixed routing (static exchange + routing-key): create a sender with a v2 target address,
+  // e.g. "/exchanges/your-exchange/your-routing-key" and then send messages without setting per-message To.
+  //   sender, err := session.NewSender(context.Background(), "/exchanges/your-exchange/your-routing-key", nil)
+  // Variable routing (dynamic): create a sender with an empty target and set Properties.To on each message,
+  // using a v2 address such as "/exchanges/<exchange>/<routing-key>" for the destination.
+  //   sender, err := session.NewSender(context.Background(), "", nil) // use Properties.To for routing per message
+  receiver, err := session.NewReceiver(context.Background(), queueName, &amqp.ReceiverOptions{Credit: int32(prefetch)})
+  sender,   err := session.NewSender(context.Background(), "", nil) // default exchange; use Properties.To for routing when needed
 }
 ```
 
@@ -206,27 +215,35 @@ amqpMsg := &amqp.Message{
 }
 
 if d.isAzureServiceBus() {
-    // Direct to queue
-    err := sender.Send(ctx, amqpMsg, nil)
+  // Direct to queue
+  err := sender.Send(ctx, amqpMsg, nil)
 } else {
-    // Through exchange with routing key
-    amqpMsg.Properties = &amqp.MessageProperties{
-        Subject: &routingKey, // RabbitMQ routing key (used by the AMQP 1.0 plugin)
-    }
-    err := sender.Send(ctx, amqpMsg, nil)
+  // RabbitMQ: prefer using AMQP v2 address targeting or per-message Properties.To for routing.
+  // Examples:
+  // 1) Fixed routing (sender created with a v2 target):
+  //    // sender was created with target "/exchanges/your-exchange/your-routing-key"
+  //    err := sender.Send(ctx, amqpMsg, nil)
+  //
+  // 2) Variable routing (sender has empty target; set Properties.To per message):
+  //    toAddr := fmt.Sprintf("/exchanges/%s/%s", exchange, routingKey)
+  //    amqpMsg.Properties = &amqp.MessageProperties{To: &toAddr}
+  //    err := sender.Send(ctx, amqpMsg, nil)
+  //
+  // Note: Subject-based routing is deprecated for RabbitMQ's AMQP 1.0 plugin; prefer Properties.To (AMQP v2 addressing) for varying routes.
+  err := sender.Send(ctx, amqpMsg, nil)
 }
 ```
 
 #### Message Consumption
 ```go
 // Unified consumption pattern
-receiver, err := session.NewReceiver(amqp.LinkTargetAddress(queueName), &amqp.ReceiverOptions{
+receiver, err := session.NewReceiver(ctx, queueName, &amqp.ReceiverOptions{
   Credit: int32(prefetch),
   // AMQP 1.0 uses credit-based flow control; manual settlement flags are not used here
 })
 
 for {
-    msg, err := receiver.Receive(ctx)
+  msg, err := receiver.Receive(ctx, nil)
     if err != nil {
         continue
     }
