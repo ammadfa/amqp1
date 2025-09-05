@@ -6,6 +6,7 @@ This is an AMQP 1.0 driver implementation for RoadRunner that provides unified s
 
 This driver provides AMQP 1.0 connectivity for RoadRunner's job queue system with dual broker support:
 
+
 ### Supported Brokers
 - **Azure Service Bus**: Native AMQP 1.0 cloud messaging service
 - **RabbitMQ**: With AMQP 1.0 plugin enabled
@@ -54,10 +55,7 @@ jobs:
     azure-queue:
       driver: amqp1
       config:
-        queue: "your-queue-name"              # Must exist in Azure Service Bus
-        routing_key: "your-queue-name"        # For compatibility
-        exchange: ""                          # Not used in Azure Service Bus
-        exchange_type: "direct"               # Keep for compatibility
+        queue: "test-queue"                   # Must exist in Azure Service Bus
         prefetch: 10
         priority: 1
         durable: false
@@ -89,8 +87,8 @@ jobs:
       driver: amqp1
       config:
         queue: "test-queue"
-        routing_key: "test"
-        exchange: ""                          # Use default exchange
+        routing_key: "test-queue"
+        exchange: "test-queue"                # Use default exchange
         exchange_type: "direct"               # informational; configure server-side
         prefetch: 10
         priority: 10
@@ -103,6 +101,14 @@ jobs:
 - Enable AMQP 1.0 plugin: `rabbitmq-plugins enable rabbitmq_amqp1_0`
 - Queues and exchanges must be created ahead of time (AMQP 1.0 client does not declare them)
 - Supports exchange-based routing; ensure bindings are configured server-side
+- Delayed-message support: to use pipeline-level message delays (x-delay) with RabbitMQ you must enable the `rabbitmq_delayed_message_exchange` plugin on the broker. Enable it with:
+
+  ```bash
+  rabbitmq-plugins enable rabbitmq_delayed_message_exchange
+  ```
+
+  Note: After enabling the plugin you may need to create the delayed exchanges (type `x-delayed-message`) and bindings server-side. The driver will set the `x-delay` application property for delayed messages when configured.
+
 ### TLS Configuration
 
 amqp1:

@@ -11,17 +11,17 @@ import (
 
 // pipeline amqp1 info
 const (
-	exchangeKey   string = "exchange"
-	exchangeType  string = "exchange_type"
-	queue         string = "queue"
-	routingKey    string = "routing_key"
-	prefetch      string = "prefetch"
-	exclusive     string = "exclusive"
-	durable       string = "durable"
-	priority      string = "priority"
+	exchangeKey  string = "exchange"
+	exchangeType string = "exchange_type"
+	queue        string = "queue"
+	routingKey   string = "routing_key"
+	prefetch     string = "prefetch"
+	exclusive    string = "exclusive"
+	durable      string = "durable"
+	priority     string = "priority"
 
 	// new in 2.12
-	redialTimeout      string = "redial_timeout"
+	redialTimeout string = "redial_timeout"
 )
 
 // config is used to parse pipeline configuration
@@ -43,9 +43,9 @@ type config struct {
 	Exchange     string `mapstructure:"exchange"`
 	ExchangeType string `mapstructure:"exchange_type"`
 
-	RoutingKey        string `mapstructure:"routing_key"`
-	Exclusive         bool   `mapstructure:"exclusive"`
-	Durable           bool   `mapstructure:"durable"`
+	RoutingKey string `mapstructure:"routing_key"`
+	Exclusive  bool   `mapstructure:"exclusive"`
+	Durable    bool   `mapstructure:"durable"`
 
 	// new in 2.12.1
 	RedialTimeout int `mapstructure:"redial_timeout"`
@@ -56,10 +56,10 @@ type config struct {
 
 // TLS configuration
 type TLS struct {
-	RootCA             string          `mapstructure:"root_ca"`
-	Key                string          `mapstructure:"key"`
-	Cert               string          `mapstructure:"cert"`
-	InsecureSkipVerify bool            `mapstructure:"insecure_skip_verify"`
+	RootCA             string `mapstructure:"root_ca"`
+	Key                string `mapstructure:"key"`
+	Cert               string `mapstructure:"cert"`
+	InsecureSkipVerify bool   `mapstructure:"insecure_skip_verify"`
 	// auth type internal
 	auth tls.ClientAuthType
 }

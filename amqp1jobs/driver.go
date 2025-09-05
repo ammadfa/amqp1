@@ -85,16 +85,15 @@ type Driver struct {
 	connStr     string
 	containerID string
 
-	retryTimeout      time.Duration
-	prefetch          int
-	priority          int64
-	exchangeName      string
-	queue             string
-	exclusive         bool
-	exchangeType      string
-	routingKey        string
-	durable           bool
-
+	retryTimeout time.Duration
+	prefetch     int
+	priority     int64
+	exchangeName string
+	queue        string
+	exclusive    bool
+	exchangeType string
+	routingKey   string
+	durable      bool
 
 	listeners uint32
 	delayed   *int64
@@ -164,7 +163,7 @@ func FromConfig(tracer *sdktrace.TracerProvider, configKey string, log *zap.Logg
 		zap.String("exchangeType", conf.ExchangeType),
 		zap.String("addr", sanitizeAddr(conf.Addr)),
 		zap.String("username", maskUser(conf.Username)),
-		zap.String("password", "***"),  // Don't log password in plain text
+		zap.String("password", "***"), // Don't log password in plain text
 		zap.String("containerID", conf.ContainerID))
 
 	eventBus, id := events.NewEventBus()
@@ -180,20 +179,33 @@ func FromConfig(tracer *sdktrace.TracerProvider, configKey string, log *zap.Logg
 		eventBus: eventBus,
 		id:       id,
 
-	priority:    conf.Priority,
-	delayed:     ptrTo(int64(0)),
-	containerID: conf.ContainerID,
+		priority:    conf.Priority,
+		delayed:     ptrTo(int64(0)),
+		containerID: conf.ContainerID,
 
-	routingKey:   conf.RoutingKey,
-	queue:        conf.Queue,
-	durable:      conf.Durable,
-	exchangeType: conf.ExchangeType,
-	exchangeName: conf.Exchange,
-	prefetch:     conf.Prefetch,
-	exclusive:    conf.Exclusive,
+		routingKey:   conf.RoutingKey,
+		queue:        conf.Queue,
+		durable:      conf.Durable,
+		exchangeType: conf.ExchangeType,
+		exchangeName: conf.Exchange,
+		prefetch:     conf.Prefetch,
+		exclusive:    conf.Exclusive,
 
-	// 2.12
-	retryTimeout: time.Duration(conf.RedialTimeout) * time.Second,
+		// 2.12
+		retryTimeout: time.Duration(conf.RedialTimeout) * time.Second,
+	}
+
+	// If exchange wasn't provided, default it to the queue name so driver
+	// validations and downstream logic that expect a non-empty exchange work
+	// consistently. This mirrors behavior where the default exchange targets
+	// the queue by name.
+	if jb.exchangeName == "" {
+		jb.exchangeName = jb.queue
+	}
+
+	// If exchange type wasn't provided, default to 'direct'
+	if jb.exchangeType == "" {
+		jb.exchangeType = "direct"
 	}
 
 	// Detect connection type and initialize accordingly
@@ -285,21 +297,25 @@ func FromPipeline(tracer *sdktrace.TracerProvider, pipeline jobs.Pipeline, log *
 		eventBus: eventBus,
 		id:       id,
 
-		routingKey:        pipeline.String(routingKey, ""),
-		queue:             pipeline.String(queue, ""),
-		exchangeType:      pipeline.String(exchangeType, "direct"),
-		exchangeName:      pipeline.String(exchangeKey, ""),
-		prefetch:          prf,
-		priority:          int64(pipeline.Int(priority, 10)),
-	durable:           pipeline.Bool(durable, false),
-	exclusive:          pipeline.Bool(exclusive, false),
+		routingKey:   pipeline.String(routingKey, ""),
+		queue:        pipeline.String(queue, ""),
+		exchangeType: pipeline.String(exchangeType, "direct"),
+		exchangeName: pipeline.String(exchangeKey, ""),
+		prefetch:     prf,
+		priority:     int64(pipeline.Int(priority, 10)),
+		durable:      pipeline.Bool(durable, false),
+		exclusive:    pipeline.Bool(exclusive, false),
 
 		// new in 2.12
 		retryTimeout: time.Duration(pipeline.Int(redialTimeout, 60)) * time.Second,
 
 		// containers
 		containerID: conf.ContainerID,
+	}
 
+	// If exchange wasn't provided in the pipeline, default it to queue name.
+	if jb.exchangeName == "" {
+		jb.exchangeName = jb.queue
 	}
 
 	// queue headers not used by the current driver implementation
@@ -333,11 +349,6 @@ func (d *Driver) Push(ctx context.Context, job jobs.Message) error {
 
 	ctx, span := trace.SpanFromContext(ctx).TracerProvider().Tracer(tracerName).Start(ctx, "amqp1_push")
 	defer span.End()
-
-	// For RabbitMQ with named exchanges, routing key is often required; for Azure Service Bus, it's queue-centric and may be empty
-	if !d.isAzureServiceBus && d.routingKey == "" && d.exchangeType != "fanout" && d.exchangeName != "" {
-		return errors.Str("empty routing key, consider adding the routing key name to the AMQP1 configuration")
-	}
 
 	// load atomic value
 	pipe := *d.pipeline.Load()
@@ -575,8 +586,17 @@ func (d *Driver) handleItem(ctx context.Context, msg *Item) error {
 
 	d.prop.Inject(ctx, propagation.HeaderCarrier(msg.headers))
 
+	// Trace Options.DelayDuration() for debugging: log the value even if zero
+	d.log.Debug("handleItem: options delay",
+		zap.Duration("optionsDelay", msg.Options.DelayDuration()),
+		zap.Bool("optionsHasDelay", msg.Options.DelayDuration() > 0),
+	)
+
 	// Pack job metadata and build structured payload
-	headerData := pack(msg.ident, msg)
+	headerData, err := pack(msg.ident, msg)
+	if err != nil {
+		return errors.E(op, err)
+	}
 	payload := map[string]any{
 		"header": headerData,
 		"body":   string(msg.Body()),
@@ -638,6 +658,20 @@ func (d *Driver) handleItem(ctx context.Context, msg *Item) error {
 		}
 	}
 
+	// Debug: serialize annotations (amqp.Annotations isn't JSON-marshalable) and log
+	annotationsSerializable := map[string]interface{}{}
+	if amqpMsg.Annotations != nil {
+		for k, v := range amqpMsg.Annotations {
+			// keys may be non-string types (symbol), normalize to string
+			annotationsSerializable[fmt.Sprintf("%v", k)] = v
+		}
+	}
+
+	d.log.Debug("AMQP message before send",
+		zap.Any("annotations", annotationsSerializable),
+		zap.Any("applicationProperties", amqpMsg.ApplicationProperties),
+	)
+
 	// Send the message
 	if err := d.sender.Send(ctx, amqpMsg, nil); err != nil {
 		if msg.Options.DelayDuration() > 0 {
@@ -660,9 +694,9 @@ func (d *Driver) handleItem(ctx context.Context, msg *Item) error {
 // connectAMQP creates a pure AMQP 1.0 connection using Azure go-amqp library
 // Compatible with both Azure Service Bus and RabbitMQ
 func connectAMQP(addr string, conf *config, log *zap.Logger) (*amqp.Conn, error) {
-    if log == nil {
-        log = zap.NewNop()
-    }
+	if log == nil {
+		log = zap.NewNop()
+	}
 	// sanitize address for logs: only scheme://host (no userinfo)
 	parsedForLog, _ := url.Parse(addr)
 	hostAddr := addr
@@ -671,111 +705,111 @@ func connectAMQP(addr string, conf *config, log *zap.Logger) (*amqp.Conn, error)
 	}
 	log.Debug("amqp: connecting", zap.String("host", hostAddr), zap.String("container_id", conf.ContainerID))
 
-    // Parse the connection string to extract credentials and host
-    parsedURL, err := url.Parse(addr)
-    if err != nil {
-        return nil, fmt.Errorf("failed to parse connection URL: %w", err)
-    }
+	// Parse the connection string to extract credentials and host
+	parsedURL, err := url.Parse(addr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse connection URL: %w", err)
+	}
 
-    // Extract credentials from URL
-    var username, password string
-    if parsedURL.User != nil {
-        username = parsedURL.User.Username()
-        password, _ = parsedURL.User.Password()
-        // URL decode the password
-        if decodedPassword, err := url.QueryUnescape(password); err == nil {
-            password = decodedPassword
-        }
-        log.Debug("amqp: credentials extracted (username only)", zap.String("username", username))
-    }
+	// Extract credentials from URL
+	var username, password string
+	if parsedURL.User != nil {
+		username = parsedURL.User.Username()
+		password, _ = parsedURL.User.Password()
+		// URL decode the password
+		if decodedPassword, err := url.QueryUnescape(password); err == nil {
+			password = decodedPassword
+		}
+		log.Debug("amqp: credentials extracted (username only)", zap.String("username", username))
+	}
 
-    // Override with explicit config values if provided
-    if conf.Username != "" {
-        username = conf.Username
-    }
-    if conf.Password != "" {
-        password = conf.Password
-    }
+	// Override with explicit config values if provided
+	if conf.Username != "" {
+		username = conf.Username
+	}
+	if conf.Password != "" {
+		password = conf.Password
+	}
 
 	// Create clean host address without credentials
 	hostAddr = fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host)
 	log.Debug("amqp: clean host address", zap.String("host", hostAddr))
 
-    // Detect broker type
-    isAzureServiceBus := strings.Contains(addr, "servicebus.windows.net")
-    isRabbitMQ := !isAzureServiceBus
-    log.Debug("amqp: broker detection",
-        zap.Bool("azure_service_bus", isAzureServiceBus),
-        zap.Bool("rabbitmq", isRabbitMQ),
-    )
+	// Detect broker type
+	isAzureServiceBus := strings.Contains(addr, "servicebus.windows.net")
+	isRabbitMQ := !isAzureServiceBus
+	log.Debug("amqp: broker detection",
+		zap.Bool("azure_service_bus", isAzureServiceBus),
+		zap.Bool("rabbitmq", isRabbitMQ),
+	)
 
-    // Configure AMQP connection options
-    connOptions := &amqp.ConnOptions{}
+	// Configure AMQP connection options
+	connOptions := &amqp.ConnOptions{}
 
-    // Set container ID if provided
-    if conf.ContainerID != "" {
-        connOptions.ContainerID = conf.ContainerID
-        log.Debug("amqp: container id set", zap.String("container_id", conf.ContainerID))
-    }
+	// Set container ID if provided
+	if conf.ContainerID != "" {
+		connOptions.ContainerID = conf.ContainerID
+		log.Debug("amqp: container id set", zap.String("container_id", conf.ContainerID))
+	}
 
-    // Configure SASL authentication
-    if username != "" && password != "" {
-        log.Debug("amqp: using SASL PLAIN")
-        connOptions.SASLType = amqp.SASLTypePlain(username, password)
-    }
+	// Configure SASL authentication
+	if username != "" && password != "" {
+		log.Debug("amqp: using SASL PLAIN")
+		connOptions.SASLType = amqp.SASLTypePlain(username, password)
+	}
 
-    // Configure TLS if using amqps
-    if strings.HasPrefix(parsedURL.Scheme, "amqps") {
-        log.Debug("amqp: configuring TLS")
-        tlsConfig := &tls.Config{
-            ServerName: parsedURL.Hostname(),
-            MinVersion: tls.VersionTLS12,
-        }
+	// Configure TLS if using amqps
+	if strings.HasPrefix(parsedURL.Scheme, "amqps") {
+		log.Debug("amqp: configuring TLS")
+		tlsConfig := &tls.Config{
+			ServerName: parsedURL.Hostname(),
+			MinVersion: tls.VersionTLS12,
+		}
 
-        if conf.TLS != nil {
-            if conf.TLS.InsecureSkipVerify {
-                tlsConfig.InsecureSkipVerify = true
-                log.Warn("amqp: TLS verification disabled via config")
-            }
+		if conf.TLS != nil {
+			if conf.TLS.InsecureSkipVerify {
+				tlsConfig.InsecureSkipVerify = true
+				log.Warn("amqp: TLS verification disabled via config")
+			}
 
-            if conf.TLS.RootCA != "" {
-                caCert, err := os.ReadFile(conf.TLS.RootCA)
-                if err != nil {
-                    return nil, fmt.Errorf("failed to read CA certificate: %w", err)
-                }
-                rootCAPool := x509.NewCertPool()
-                if !rootCAPool.AppendCertsFromPEM(caCert) {
-                    return nil, fmt.Errorf("failed to parse CA certificate")
-                }
-                tlsConfig.RootCAs = rootCAPool
-                log.Debug("amqp: custom RootCA loaded")
-            }
+			if conf.TLS.RootCA != "" {
+				caCert, err := os.ReadFile(conf.TLS.RootCA)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read CA certificate: %w", err)
+				}
+				rootCAPool := x509.NewCertPool()
+				if !rootCAPool.AppendCertsFromPEM(caCert) {
+					return nil, fmt.Errorf("failed to parse CA certificate")
+				}
+				tlsConfig.RootCAs = rootCAPool
+				log.Debug("amqp: custom RootCA loaded")
+			}
 
-            if conf.TLS.Cert != "" && conf.TLS.Key != "" {
-                cert, err := tls.LoadX509KeyPair(conf.TLS.Cert, conf.TLS.Key)
-                if err != nil {
-                    return nil, fmt.Errorf("failed to load client certificate: %w", err)
-                }
-                tlsConfig.Certificates = []tls.Certificate{cert}
-                log.Debug("amqp: client certificate loaded")
-            }
-        }
+			if conf.TLS.Cert != "" && conf.TLS.Key != "" {
+				cert, err := tls.LoadX509KeyPair(conf.TLS.Cert, conf.TLS.Key)
+				if err != nil {
+					return nil, fmt.Errorf("failed to load client certificate: %w", err)
+				}
+				tlsConfig.Certificates = []tls.Certificate{cert}
+				log.Debug("amqp: client certificate loaded")
+			}
+		}
 
-        connOptions.TLSConfig = tlsConfig
-    }
+		connOptions.TLSConfig = tlsConfig
+	}
 
-    // Set hostname for proper TLS verification
-    connOptions.HostName = parsedURL.Hostname()
-    log.Debug("amqp: dialing")
+	// Set hostname for proper TLS verification
+	connOptions.HostName = parsedURL.Hostname()
+	log.Debug("amqp: dialing")
 
-    // Create the connection
-    conn, err := amqp.Dial(context.Background(), hostAddr, connOptions)
-    if err != nil {
-        return nil, fmt.Errorf("failed to connect to AMQP broker: %w", err)
-    }
+	// Create the connection
+	conn, err := amqp.Dial(context.Background(), hostAddr, connOptions)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to AMQP broker: %w", err)
+	}
 
-    log.Debug("amqp: connection established")
-    return conn, nil
+	log.Debug("amqp: connection established")
+	return conn, nil
 }
 
 func (d *Driver) init() error {
@@ -823,7 +857,6 @@ func (d *Driver) init() error {
 	if err != nil {
 		return fmt.Errorf("failed to create AMQP sender: %w", err)
 	}
-
 
 	d.log.Debug("AMQP1 Driver initialized successfully",
 		zap.String("targetAddress", targetAddress),
@@ -919,47 +952,11 @@ func (d *Driver) processMessage(message *amqp.Message) error {
 		zap.String("enqueued", enqueued),
 	)
 
-	// Extract header and body — expect header as object
-	headerIface, ok := payload["header"]
-	if !ok {
-		return fmt.Errorf("payload missing header field")
-	}
-
-	headerData, ok := headerIface.(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("payload header must be an object")
-	}
-
-	// Extract body (may be string or nested JSON)
-	var bodyStr string
-	switch b := payload["body"].(type) {
-	case string:
-		bodyStr = b
-	default:
-		// try to marshal other types back to JSON string
-		if bb, err := json.Marshal(b); err == nil {
-			bodyStr = string(bb)
-		} else {
-			return fmt.Errorf("payload missing or invalid body field")
-		}
-	}
-
-	// Debug: Log parsed header metadata (do not log header contents to avoid PII)
-	d.log.Debug("AMQP1 Parsed Header",
-		zap.Int("headerKeys", len(headerData)),
-		zap.Int("payloadSize", payloadSize),
-		zap.String("messageID", msgID),
-		zap.String("subject", subject),
-	)
-
-	// Unpack job metadata using existing unpack function
-	item, err := unpack(headerData)
+	// Use driver-level unpack that consumes the entire AMQP message
+	item, err := d.unpack(message)
 	if err != nil {
 		return fmt.Errorf("failed to unpack job metadata: %w", err)
 	}
-
-	// Set the actual job payload and broker control handles
-	item.payload = []byte(bodyStr)
 	item.receiver = d.receiver
 	item.message = message
 	item.driver = d

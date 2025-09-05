@@ -1,6 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "AMQP 1.0 Driver Configuration Schema",
+  "description": "Configuration schema for the AMQP 1.0 driver used by the jobs system.",
   "type": "object",
   "properties": {
     "amqp1": {
@@ -101,9 +102,56 @@
                 },
                 "redial_timeout": {
                   "type": "integer",
-                  "minimum": 1,
+                  "minimum": 0,
                   "default": 60,
                   "description": "Connection retry timeout in seconds"
+                },
+                "delete_queue_on_stop": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether to delete the queue when stopping the pipeline."
+                },
+                "exchange_durable": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether the exchange is durable."
+                },
+                "exchange_auto_delete": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether to auto-delete the exchange when last queue unbinds"
+                },
+                "queue_auto_delete": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether to auto-delete the queue when last consumer unsubscribes"
+                },
+                "consumer_id": {
+                  "type": "string",
+                  "description": "Unique identifier for the consumer",
+                  "default": "roadrunner-<uuid>"
+                },
+                "multiple_ack": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Enable multiple ACK for batch acknowledgements."
+                },
+                "requeue_on_fail": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether to requeue a message on failure using broker mechanisms."
+                },
+                "queue_headers": {
+                  "type": "object",
+                  "description": "Queue declare arguments / headers.",
+                  "minProperties": 1,
+                  "additionalProperties": false,
+                  "patternProperties": {
+                    "^[a-zA-Z0-9._-]+$": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
                 }
               },
               "required": ["driver"],

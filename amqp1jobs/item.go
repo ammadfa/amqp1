@@ -3,19 +3,18 @@ package amqp1jobs
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+
 	"time"
 
 	"github.com/Azure/go-amqp"
 	"github.com/google/uuid"
 	"github.com/roadrunner-server/api/v4/plugins/v4/jobs"
 	"github.com/roadrunner-server/errors"
+	"go.uber.org/zap"
 )
 
 const (
-	auto     string = "deduced_by_rr"
-	ujobID   string = "rr_id"
-	ujobTime string = "rr_time"
+	auto string = "deduced_by_rr"
 )
 
 type Item struct {
@@ -71,18 +70,34 @@ func (i *Item) Body() []byte {
 
 // Context packs job context (job, id, driver) into binary payload.
 func (i *Item) Context() ([]byte, error) {
-	const op = errors.Op("amqp1_jobs_context")
+	ctx, err := json.Marshal(
+		struct {
+			ID       string              `json:"id"`
+			Job      string              `json:"job"`
+			Driver   string              `json:"driver"`
+			Queue    string              `json:"queue"`
+			Headers  map[string][]string `json:"headers"`
+			Pipeline string              `json:"pipeline"`
+		}{
+			ID:      i.ident,
+			Job:     i.job,
+			Driver:  pluginName,
+			Headers: i.headers,
+			Queue:   i.GroupID(),
+			Pipeline: func() string {
+				if i.Options != nil {
+					return i.Options.Pipeline
+				}
+				return ""
+			}(),
+		},
+	)
 
-	// Pack job metadata for RoadRunner framework
-	headerData := pack(i.ident, i)
-
-	// Return JSON-encoded context for the framework
-	contextJSON, err := json.Marshal(headerData)
 	if err != nil {
-		return nil, errors.E(op, err)
+		return nil, err
 	}
 
-	return contextJSON, nil
+	return ctx, nil
 }
 
 // Ident returns job id
@@ -236,144 +251,181 @@ func fromJob(job jobs.Message) *Item {
 }
 
 // pack job metadata into AMQP 1.0 compatible headers
-func pack(id string, item *Item) map[string]interface{} {
-	out := make(map[string]interface{})
-
-	// Required fields for Spiral framework
-	out["id"] = id
-	out["job"] = item.job
-	out["driver"] = "amqp" // Set driver type for Spiral framework
-	out["queue"] = item.GroupID() // Use the pipeline/queue name
-
-	// Pipeline information
-	pipeline := "default"
-	if item.Options != nil && item.Options.Pipeline != "" {
-		pipeline = item.Options.Pipeline
+// pack job metadata into headers (RR keys only, parity with amqp driver)
+func pack(id string, item *Item) (map[string]interface{}, error) {
+	h, err := json.Marshal(item.headers)
+	if err != nil {
+		return nil, err
 	}
-	out["pipeline"] = pipeline
 
-	// Headers - must be in the format map[string][]string for Spiral
-	out["headers"] = item.headers
+	var pipeline string
+	var delay int64
+	var priority int64
+	var autoAck bool
 
-	// Timeout - should be numeric (in seconds), not duration string
-	timeout := 60 // default timeout in seconds
-	if item.Options != nil && item.Options.DelayDuration() > 0 {
-		timeout = int(item.Options.DelayDuration().Seconds())
-	}
-	out["timeout"] = timeout
-
-	// Optional fields
 	if item.Options != nil {
-		if item.Options.DelayDuration() > 0 {
-			out[ujobTime] = time.Now().UTC().Add(item.Options.DelayDuration()).Format(time.RFC3339)
+		pipeline = item.Options.Pipeline
+		if item.Options.Delay != nil {
+			delay = *item.Options.Delay
 		}
-
 		if item.Options.Priority != nil {
-			out["priority"] = *item.Options.Priority
+			priority = *item.Options.Priority
 		}
-
-		out["auto_ack"] = item.Options.AutoAck
+		autoAck = item.Options.AutoAck
 	}
 
-	return out
+	return map[string]interface{}{
+		jobs.RRID:       id,
+		jobs.RRJob:      item.job,
+		jobs.RRPipeline: pipeline,
+		jobs.RRHeaders:  h,
+		jobs.RRDelay:    delay,
+		jobs.RRPriority: priority,
+		jobs.RRAutoAck:  autoAck,
+	}, nil
 }
 
-// unpack extracts job metadata from AMQP 1.0 headers
-func unpack(headers map[string]interface{}) (*Item, error) {
-	const op = errors.Op("amqp1_unpack_job")
+// (header-only helper removed) - header parsing is merged into driver-level unpack
 
+// unpack parses AMQP message payload (AMQP1) and returns Item
+func (d *Driver) unpack(msg *amqp.Message) (*Item, error) {
+	const op = errors.Op("amqp1_unpack_msg")
+
+	if msg == nil || len(msg.Data) == 0 {
+		return nil, errors.E(op, errors.Str("empty amqp message payload"))
+	}
+
+	// parse top-level payload JSON
+	var payload map[string]interface{}
+	if err := json.Unmarshal(msg.Data[0], &payload); err != nil {
+		return nil, errors.E(op, err)
+	}
+
+	headerIface, ok := payload["header"]
+	if !ok {
+		return nil, errors.E(op, errors.Str("payload missing header field"))
+	}
+
+	headerData, ok := headerIface.(map[string]interface{})
+	if !ok {
+		return nil, errors.E(op, errors.Str("payload header must be an object"))
+	}
+
+	// convert application properties to headers using convHeaders
 	item := &Item{
-		headers: make(map[string][]string),
+		headers: convHeaders(headerData, d.log),
 		Options: &Options{},
 	}
 
-	for key, value := range headers {
-		switch key {
-		case "id", ujobID:
-			if id, ok := value.(string); ok {
-				item.ident = id
+	// id
+	if v, ok := headerData[jobs.RRID]; !ok {
+		item.ident = uuid.NewString()
+	} else if id, ok := v.(string); ok {
+		item.ident = id
+	} else {
+		item.ident = uuid.NewString()
+	}
+
+	// job
+	if v, ok := headerData[jobs.RRJob]; !ok {
+		item.job = auto
+	} else if job, ok := v.(string); ok {
+		item.job = job
+	} else {
+		item.job = auto
+	}
+
+	// pipeline
+	if v, ok := headerData[jobs.RRPipeline]; ok {
+		if pipeline, ok := v.(string); ok {
+			item.Options.Pipeline = pipeline
+		}
+	}
+
+	// If jobs.RRHeaders contains JSON bytes/object, prefer unmarsaled headers
+	if h, ok := headerData[jobs.RRHeaders]; ok {
+		switch hh := h.(type) {
+		case []byte:
+			var unmar map[string][]string
+			if err := json.Unmarshal(hh, &unmar); err == nil {
+				item.headers = unmar
+			} else {
+				d.log.Warn("failed to unmarshal headers (should be JSON), continuing execution", zap.Any("headers", hh), zap.Error(err))
 			}
-		case "job":
-			if job, ok := value.(string); ok {
-				item.job = job
+		case string:
+			var unmar map[string][]string
+			if err := json.Unmarshal([]byte(hh), &unmar); err == nil {
+				item.headers = unmar
 			}
-		case "headers":
-			// Handle headers in the Spiral format
-			if headerMap, ok := value.(map[string][]string); ok {
-				item.headers = headerMap
-			} else if headerMapAny, ok := value.(map[string]interface{}); ok {
-				for hkey, hvalue := range headerMapAny {
-					switch hv := hvalue.(type) {
-					case []interface{}:
-						stringSlice := make([]string, len(hv))
-						for i, v := range hv {
-							stringSlice[i] = fmt.Sprintf("%v", v)
-						}
-						item.headers[hkey] = stringSlice
-					case []string:
-						item.headers[hkey] = hv
-					case string:
-						item.headers[hkey] = []string{hv}
-					default:
-						item.headers[hkey] = []string{fmt.Sprintf("%v", hv)}
-					}
-				}
+		}
+	}
+
+	// delay
+	if v, ok := headerData[jobs.RRDelay]; ok {
+		switch t := v.(type) {
+		case int64:
+			d := t
+			if d > 0 {
+				item.Options.Delay = &d
 			}
-		case "priority":
-			switch p := value.(type) {
-			case int64:
-				item.Options.Priority = &p
-			case float64:
-				priority := int64(p)
-				item.Options.Priority = &priority
-			case int:
-				priority := int64(p)
-				item.Options.Priority = &priority
+		case float64:
+			d := int64(t)
+			if d > 0 {
+				item.Options.Delay = &d
 			}
-		case "pipeline":
-			if pipeline, ok := value.(string); ok {
-				item.Options.Pipeline = pipeline
+		case int:
+			d := int64(t)
+			if d > 0 {
+				item.Options.Delay = &d
 			}
-		case "auto_ack":
-			if autoAck, ok := value.(bool); ok {
-				item.Options.AutoAck = autoAck
-			}
-		case "timeout":
-			// timeout is numeric in seconds
-			switch t := value.(type) {
-			case int64:
-				delay := t
-				if delay > 0 {
-					item.Options.Delay = &delay
-				}
-			case float64:
-				delay := int64(t)
-				if delay > 0 {
-					item.Options.Delay = &delay
-				}
-			case int:
-				delay := int64(t)
-				if delay > 0 {
-					item.Options.Delay = &delay
-				}
-			}
-		case ujobTime:
-			if timeStr, ok := value.(string); ok {
-				if t, err := time.Parse(time.RFC3339, timeStr); err == nil {
-					delay := int64(time.Until(t).Seconds())
-					if delay > 0 {
-						item.Options.Delay = &delay
-					}
-				}
-			}
-		default:
-			// ignore
+		}
+	}
+
+	// priority
+	if v, ok := headerData[jobs.RRPriority]; ok {
+		switch p := v.(type) {
+		case int64:
+			item.Options.Priority = &p
+		case float64:
+			pr := int64(p)
+			item.Options.Priority = &pr
+		case int:
+			pr := int64(p)
+			item.Options.Priority = &pr
+		}
+	}
+
+	// auto ack
+	if v, ok := headerData[jobs.RRAutoAck]; ok {
+		if aa, ok := v.(bool); ok {
+			item.Options.AutoAck = aa
 		}
 	}
 
 	if item.ident == "" {
 		item.ident = uuid.NewString()
 	}
+
+	// set defaults using driver context
+	if item.Options == nil {
+		item.Options = &Options{}
+	}
+	if item.Options.Pipeline == "" {
+		if p := d.pipeline.Load(); p != nil {
+			item.Options.Pipeline = (*p).Name()
+		}
+	}
+
+	// parse body
+	var bodyStr string
+	if b, ok := payload["body"].(string); ok {
+		bodyStr = b
+	} else {
+		if bb, err := json.Marshal(payload["body"]); err == nil {
+			bodyStr = string(bb)
+		}
+	}
+	item.payload = []byte(bodyStr)
 
 	return item, nil
 }
