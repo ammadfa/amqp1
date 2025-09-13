@@ -1,0 +1,175 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AMQP 1.0 Driver Configuration Schema",
+  "description": "Configuration schema for the AMQP 1.0 driver used by the jobs system.",
+  "type": "object",
+  "properties": {
+    "amqp1": {
+      "type": "object",
+      "properties": {
+        "addr": {
+          "type": "string",
+          "description": "AMQP 1.0 connection URL",
+          "default": "amqp://127.0.0.1:5672/",
+          "format": "uri"
+        },
+        "container_id": {
+          "type": "string",
+          "description": "Unique identifier for the AMQP container"
+        },
+        "tls": {
+          "type": "object",
+          "properties": {
+            "root_ca": {
+              "type": "string",
+              "description": "Path to root CA certificate file"
+            },
+            "key": {
+              "type": "string",
+              "description": "Path to client private key file"
+            },
+            "cert": {
+              "type": "string",
+              "description": "Path to client certificate file"
+            },
+            "insecure_skip_verify": {
+              "type": "boolean",
+              "default": false,
+              "description": "Skip server certificate verification (NOT recommended for production)"
+            }
+          },
+          "additionalProperties": false,
+          "anyOf": [
+            {"required": ["key", "cert"]},
+            {"not": {"anyOf": [{"required": ["key"]}, {"required": ["cert"]}]}}
+          ]
+        }
+      },
+      "required": ["addr"]
+    },
+    "jobs": {
+      "type": "object",
+      "properties": {
+        "pipelines": {
+          "type": "object",
+          "patternProperties": {
+            "^[a-zA-Z0-9_-]+$": {
+              "type": "object",
+              "properties": {
+                "driver": {
+                  "type": "string",
+                  "const": "amqp1"
+                },
+                "queue": {
+                  "type": "string",
+                  "description": "Queue name"
+                },
+                "exchange": {
+                  "type": "string",
+                  "description": "Exchange name (empty string for default exchange)",
+                  "default": ""
+                },
+                "exchange_type": {
+                  "type": "string",
+                  "enum": ["direct", "topic", "fanout", "headers"],
+                  "default": "direct"
+                },
+                "routing_key": {
+                  "type": "string",
+                  "description": "Routing key for message routing"
+                },
+                "prefetch": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 10,
+                  "description": "Number of messages to prefetch"
+                },
+                "priority": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "default": 10,
+                  "description": "Queue priority"
+                },
+                "durable": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether the queue should survive server restarts"
+                },
+                "exclusive": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether the queue is exclusive to this connection"
+                },
+                "redial_timeout": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "default": 60,
+                  "description": "Connection retry timeout in seconds"
+                },
+                "delete_queue_on_stop": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether to delete the queue when stopping the pipeline."
+                },
+                "exchange_durable": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether the exchange is durable."
+                },
+                "exchange_auto_delete": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether to auto-delete the exchange when last queue unbinds"
+                },
+                "queue_auto_delete": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether to auto-delete the queue when last consumer unsubscribes"
+                },
+                "consumer_id": {
+                  "type": "string",
+                  "description": "Unique identifier for the consumer",
+                  "default": "roadrunner-<uuid>"
+                },
+                "multiple_ack": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Enable multiple ACK for batch acknowledgements."
+                },
+                "requeue_on_fail": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether to requeue a message on failure using broker mechanisms."
+                },
+                "queue_headers": {
+                  "type": "object",
+                  "description": "Queue declare arguments / headers.",
+                  "minProperties": 1,
+                  "additionalProperties": false,
+                  "patternProperties": {
+                    "^[a-zA-Z0-9._-]+$": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
+              },
+              "required": ["driver"],
+              "oneOf": [
+                { "required": ["queue"] },
+                { "required": ["routing_key"] }
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "consume": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional list of pipeline names to consume"
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="620" viewBox="0 0 1100 620">
+  <style>
+    .bg { fill: #ffffff; }
+    .lifeline { stroke: #c0c8d0; stroke-width: 2; }
+    .actor { fill: #f6fbff; stroke: #2b6cb0; stroke-width: 2; rx:8; }
+    .actor-text { font: 700 13px/1.2 Inter, Arial, sans-serif; fill:#0b3a66; }
+    .label { font: 12px/1.2 Inter, Arial, sans-serif; fill:#111827; }
+    .arrow { stroke: #0b3a66; stroke-width: 2; marker-end: url(#arrow); }
+    .activation { fill:#cfe8ff; stroke:#2b6cb0; stroke-width:1; }
+    .note { font: 12px/1.2 Inter, Arial, sans-serif; fill:#0f172a; }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L9,4 L0,8 z" fill="#0b3a66" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1100" height="620" />
+
+  <!-- Actors (top) -->
+  <g transform="translate(60,30)">
+    <g transform="translate(0,0)">
+      <rect class="actor" x="0" y="0" width="160" height="40" />
+      <text class="actor-text" x="12" y="26">Publisher App</text>
+      <line class="lifeline" x1="80" y1="48" x2="80" y2="520" stroke-dasharray="4 6" />
+    </g>
+
+    <g transform="translate(220,0)">
+      <rect class="actor" x="0" y="0" width="220" height="40" />
+      <text class="actor-text" x="12" y="26">RoadRunner (amqp1 Driver)</text>
+      <line class="lifeline" x1="110" y1="48" x2="110" y2="520" stroke-dasharray="4 6" />
+    </g>
+
+    <g transform="translate(520,0)">
+      <rect class="actor" x="0" y="0" width="160" height="40" />
+      <text class="actor-text" x="12" y="26">AMQP Broker</text>
+      <line class="lifeline" x1="80" y1="48" x2="80" y2="520" stroke-dasharray="4 6" />
+    </g>
+
+    <g transform="translate(760,0)">
+      <rect class="actor" x="0" y="0" width="160" height="40" />
+      <text class="actor-text" x="12" y="26">Consumer / Worker</text>
+      <line class="lifeline" x1="80" y1="48" x2="80" y2="520" stroke-dasharray="4 6" />
+    </g>
+
+    <!-- Interactions -->
+    <!-- 1. push(job) -->
+    <g transform="translate(0,90)">
+      <line class="arrow" x1="80" y1="0" x2="230" y2="0" />
+      <text class="label" x="120" y="-8">push(job)</text>
+
+      <!-- activation on RR -->
+      <rect class="activation" x="190" y="6" width="60" height="28" />
+      <text class="label" x="200" y="26">handleItem</text>
+    </g>
+
+    <!-- RR -> AMQP Broker (connect/session & send) -->
+    <g transform="translate(0,170)">
+      <line class="arrow" x1="230" y1="0" x2="560" y2="0" />
+      <text class="label" x="360" y="-8">dial / ensure session / send(message)</text>
+
+      <!-- activation on Broker -->
+      <rect class="activation" x="510" y="6" width="60" height="28" />
+      <text class="label" x="520" y="26">enqueue</text>
+    </g>
+
+    <!-- Broker -> Consumer deliver -->
+    <g transform="translate(0,250)">
+      <line class="arrow" x1="560" y1="0" x2="800" y2="0" />
+      <text class="label" x="650" y="-8">deliver(message)</text>
+
+      <!-- activation on Consumer -->
+      <rect class="activation" x="740" y="6" width="60" height="28" />
+      <text class="label" x="750" y="26">process</text>
+    </g>
+
+    <!-- Consumer -> RR ack -->
+    <g transform="translate(0,330)">
+      <line class="arrow" x1="800" y1="0" x2="560" y2="0" />
+      <text class="label" x="660" y="-8">ack / nack / release</text>
+    </g>
+
+    <!-- RR acknowledges to broker (flow control) -->
+    <g transform="translate(0,390)">
+      <line class="arrow" x1="560" y1="0" x2="230" y2="0" />
+      <text class="label" x="360" y="-8">AcceptMessage / RejectMessage / ReleaseMessage</text>
+    </g>
+
+    <!-- Notes box -->
+    <g transform="translate(0,460)">
+      <rect x="0" y="0" width="940" height="80" fill="#f8fafc" stroke="#e6eef9" rx="6"/>
+      <text class="note" x="12" y="20">Routing recommendations:</text>
+      <text class="note" x="12" y="40">• Fixed routing: create sender with v2 target = "/exchanges/&lt;exchange&gt;/&lt;routing-key&gt;"</text>
+      <text class="note" x="12" y="60">• Variable routing: create sender with empty target and set message.Properties.To per message</text>
+    </g>
+
+  </g>
+
+  <text class="label" x="40" y="602">Diagram: amqp1 driver publish → broker → consume lifecycle</text>
+</svg>
