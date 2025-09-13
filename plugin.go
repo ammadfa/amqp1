@@ -1,7 +1,7 @@
 package amqp1
 
 import (
-	"github.com/roadrunner-server/amqp1/amqp1jobs"
+	"github.com/ammadfa/amqp1/amqp1jobs"
 	"github.com/roadrunner-server/api/v4/plugins/v4/jobs"
 	"github.com/roadrunner-server/endure/v2/dep"
 	"github.com/roadrunner-server/errors"
