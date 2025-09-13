@@ -1,0 +1,55 @@
+[roadrunner]
+# Use a more recent version that supports Go 1.25
+ref = "v2024.3.0"
+
+[debug]
+enabled = false
+
+[log]
+level = "info"
+mode = "production"
+
+# optional, needed only to download RR once (per version)
+[github.token]
+token = "${GITHUB_TOKEN}"
+
+# Custom AMQP1 plugin from your repository
+[plugins.amqp1]
+tag = "e034a70"
+module_name = "github.com/ammadfa/amqp1"
+
+# LOGS - use v4 versions for compatibility
+[plugins.appLogger]
+tag = "v4.3.3"
+module_name = "github.com/roadrunner-server/app-logger/v4"
+
+[plugins.logger]
+tag = "v4.3.3"
+module_name = "github.com/roadrunner-server/logger/v4"
+
+[plugins.lock]
+tag = "v4.3.3"
+module_name = "github.com/roadrunner-server/lock/v4"
+
+[plugins.rpc]
+tag = "v4.3.3"
+module_name = "github.com/roadrunner-server/rpc/v4"
+
+# HTTP + MIDDLEWARE - use v4 versions
+[plugins.http]
+tag = "v4.3.3"
+module_name = "github.com/roadrunner-server/http/v4"
+
+[plugins.server]
+tag = "v4.3.3"
+module_name = "github.com/roadrunner-server/server/v4"
+
+# JOBS (Core jobs plugin + other drivers)
+[plugins.jobs]
+tag = "v4.3.3"
+module_name = "github.com/roadrunner-server/jobs/v4"
+
+# Basic status plugin for health checks
+[plugins.status]
+tag = "v4.3.3"
+module_name = "github.com/roadrunner-server/status/v4"

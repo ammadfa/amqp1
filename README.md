@@ -382,33 +382,143 @@ Most application code remains unchanged as the driver maintains the same RoadRun
 - **Azure Service Bus**: Use session-enabled queues for ordered processing
 - **RabbitMQ**: Enable AMQP 1.0 plugin and tune exchange configurations
 
-## Testing
+## Building Custom RoadRunner Binary
 
-The driver includes comprehensive tests covering:
+This repository includes configuration to build a custom RoadRunner binary with the AMQP1 plugin integrated.
 
-- Connection establishment and management for both Azure Service Bus and RabbitMQ
-- Message publishing and consumption with broker detection
-- Error handling and automatic reconnection
-- TLS configuration and certificate validation
-- Pipeline lifecycle management and graceful shutdown
+### Prerequisites
 
-Run tests with:
-```bash
-cd amqp1
-make test
-```
+1. **Docker** installed on your system
+2. **GitHub Personal Access Token** (optional, but recommended to avoid rate limits)
 
-Integration tests require:
-- Azure Service Bus namespace (for Azure tests)
-- RabbitMQ with AMQP 1.0 plugin (for RabbitMQ tests)
+### Build Options
+
+#### Option 1: Using Makefile (Recommended)
+
+The repository includes a Makefile with convenient build targets:
+
+1. **Set up your GitHub token** (optional but recommended):
+   ```bash
+   export GITHUB_TOKEN="your_github_personal_access_token"
+   ```
+
+2. **Build custom RoadRunner binary**:
+   ```bash
+   make build-roadrunner
+   ```
+
+3. **Extract binary for local use**:
+   ```bash
+   make extract-binary
+   ```
+
+4. **Run the extracted binary**:
+   ```bash
+   make run-roadrunner
+   ```
+
+5. **Verify the build**:
+   ```bash
+   make test-build
+   ```
+
+#### Option 2: Using Docker Commands Directly
+
+If you prefer to use Docker commands directly:
+
+1. **Set up your GitHub token** (optional but recommended):
+   ```bash
+   export GITHUB_TOKEN="your_github_personal_access_token"
+   ```
+
+2. **Build the Docker image**:
+   ```bash
+   docker build \
+     --build-arg GITHUB_TOKEN="${GITHUB_TOKEN}" \
+     --build-arg APP_VERSION="2024.3.0" \
+     --build-arg BUILD_TIME="$(date +%FT%T%z)" \
+     -t roadrunner-amqp1:latest .
+   ```
+
+3. **Run the container**:
+   ```bash
+   docker run -p 8080:8080 roadrunner-amqp1:latest
+   ```
+
+#### Option 3: Extract Binary Manually
+
+If you want to extract the built binary manually:
+
+1. **Build the image** (using Option 1 or 2 above)
+
+2. **Create a temporary container and copy the binary**:
+   ```bash
+   # Create a temporary container
+   docker create --name temp-rr roadrunner-amqp1:latest
+
+   # Copy the binary from the container
+   docker cp temp-rr:/usr/bin/rr ./rr
+
+   # Remove the temporary container
+   docker rm temp-rr
+
+   # Make the binary executable
+   chmod +x ./rr
+   ```
+
+3. **Run the binary locally**:
+   ```bash
+   ./rr serve
+   ```
+
+### Build Configuration
+
+The build uses `velox.toml` configuration which includes:
+
+- **Custom AMQP1 plugin** from this repository
+- **Core RoadRunner plugins** (HTTP, gRPC, Jobs, KV, etc.)
+- **Job queue drivers** (SQS, Beanstalk, NATS, Kafka, Google Pub/Sub)
+- **Storage drivers** (Redis, Memcached, BoltDB, Memory)
+- **Observability** (Metrics, OpenTelemetry, Prometheus)
+
+### Troubleshooting Build Issues
+
+#### GitHub Rate Limits
+
+If you encounter rate limiting issues:
+
+1. Create a GitHub Personal Access Token:
+   - Go to GitHub Settings → Developer settings → Personal access tokens
+   - Generate a new token with `repo` scope
+   - Set the `GITHUB_TOKEN` environment variable
+
+#### Build Errors
+
+1. **Check Docker logs**:
+   ```bash
+   docker build --no-cache -t roadrunner-amqp1:latest .
+   ```
+
+2. **Verify velox.toml syntax**:
+   The configuration should be valid TOML format
+
+3. **Check plugin compatibility**:
+   Ensure all plugins use compatible versions (v4.x.x for current RoadRunner)
+
+### Development Workflow
+
+To modify the build:
+
+1. **Edit `velox.toml`** to add/remove plugins or change versions
+2. **Rebuild the Docker image** with your changes
+3. **Verify the new binary** with your configuration
 
 ## Contributing
 
 1. Follow the existing code style and patterns
-2. Add tests for new functionality covering both broker types
-3. Update documentation for configuration changes
-4. Ensure compatibility with RoadRunner job interface
-5. Test against both Azure Service Bus and RabbitMQ
+2. Update documentation for configuration changes
+3. Ensure compatibility with RoadRunner job interface
+4. Validate against both Azure Service Bus and RabbitMQ
 
 ## License
 
