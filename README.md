@@ -399,7 +399,7 @@ The repository includes a Makefile with convenient build targets:
 
 1. **Set up your GitHub token** (optional but recommended):
    ```bash
-   export GITHUB_TOKEN="your_github_personal_access_token"
+   export RT_TOKEN="your_github_personal_access_token"
    ```
 
 2. **Build custom RoadRunner binary**:
@@ -428,13 +428,13 @@ If you prefer to use Docker commands directly:
 
 1. **Set up your GitHub token** (optional but recommended):
    ```bash
-   export GITHUB_TOKEN="your_github_personal_access_token"
+   export RT_TOKEN="your_github_personal_access_token"
    ```
 
 2. **Build the Docker image**:
    ```bash
    docker build \
-     --build-arg GITHUB_TOKEN="${GITHUB_TOKEN}" \
+     --build-arg RT_TOKEN="${RT_TOKEN}" \
      --build-arg APP_VERSION="2024.3.0" \
      --build-arg BUILD_TIME="$(date +%FT%T%z)" \
      -t roadrunner-amqp1:latest .
@@ -490,7 +490,7 @@ If you encounter rate limiting issues:
 1. Create a GitHub Personal Access Token:
    - Go to GitHub Settings → Developer settings → Personal access tokens
    - Generate a new token with `repo` scope
-   - Set the `GITHUB_TOKEN` environment variable
+   - Set the `RT_TOKEN` environment variable
 
 #### Build Errors
 
