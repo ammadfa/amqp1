@@ -16,7 +16,7 @@ GOMOD=$(GOCMD) mod
 # Docker and RoadRunner parameters
 DOCKER_IMAGE_NAME ?= roadrunner-amqp1
 DOCKER_TAG ?= latest
-APP_VERSION ?= 2024.3.0
+APP_VERSION ?= 2025.3.0
 BUILD_TIME := $(shell date +%FT%T%z)
 
 # Build the project
@@ -85,17 +85,17 @@ help:
 .PHONY: check-env
 check-env: ## Check if required environment variables are set
 	@echo "Checking environment variables..."
-	@if [ -z "$(GITHUB_TOKEN)" ]; then \
-		echo "❌ GITHUB_TOKEN is not set. Please check your .env file."; \
+	@if [ -z "$(RT_TOKEN)" ]; then \
+		echo "❌ RT_TOKEN is not set. Please check your .env file."; \
 		exit 1; \
 	fi
-	@echo "✅ GITHUB_TOKEN is set"
+	@echo "✅ RT_TOKEN is set"
 
 .PHONY: dev-setup
 dev-setup: ## Set up development environment
 	@echo "Setting up development environment..."
 	@if [ ! -f .env ]; then \
-		echo "⚠️  .env file not found. Please create it with your GITHUB_TOKEN."; \
+		echo "⚠️  .env file not found. Please create it with your RT_TOKEN."; \
 		exit 1; \
 	fi
 	@echo "✅ Development environment ready"
@@ -104,7 +104,7 @@ dev-setup: ## Set up development environment
 build-roadrunner: check-env ## Build custom RoadRunner binary with AMQP1 plugin using Docker
 	@echo "Building RoadRunner with custom AMQP1 plugin..."
 	docker build \
-		--build-arg GITHUB_TOKEN="$(GITHUB_TOKEN)" \
+		--build-arg RT_TOKEN="$(RT_TOKEN)" \
 		--build-arg APP_VERSION="$(APP_VERSION)" \
 		--build-arg BUILD_TIME="$(BUILD_TIME)" \
 		-t $(DOCKER_IMAGE_NAME):$(DOCKER_TAG) \
@@ -119,6 +119,7 @@ extract-binary: ## Extract RoadRunner binary from Docker image to local filesyst
 	docker cp temp-container:/usr/bin/rr ./bin/rr
 	docker rm temp-container
 	chmod +x ./bin/rr
+	./bin/rr --version
 	@echo "✅ Binary extracted to ./bin/rr"
 
 .PHONY: run-roadrunner

@@ -5,7 +5,7 @@ FROM --platform=${TARGETPLATFORM:-linux/amd64} ghcr.io/roadrunner-server/velox:l
 
 # app version and build date must be passed during image building (version without any prefix).
 # e.g.: `docker build --build-arg "APP_VERSION=1.2.3" --build-arg "BUILD_TIME=$(date +%FT%T%z)" .`
-ARG APP_VERSION="2024.3.0"
+ARG APP_VERSION="undefined"
 ARG BUILD_TIME="undefined"
 
 # copy your configuration into the docker
@@ -19,8 +19,8 @@ ENV GOTOOLCHAIN=auto
 
 # Set GitHub token for accessing the repository (if needed)
 # You can pass this as a build arg or set it in your environment
-ARG GITHUB_TOKEN
-ENV GITHUB_TOKEN=${GITHUB_TOKEN}
+ARG RT_TOKEN
+ENV RT_TOKEN=${RT_TOKEN}
 
 # RUN build
 RUN vx build -c velox.toml -o /usr/local/bin/
