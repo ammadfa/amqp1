@@ -1,82 +1,149 @@
 [roadrunner]
-# ref -> reference, tag, commit or branch
 ref = "master"
 
-# the debug option is used to build RR with debug symbols to profile it with pprof
 [debug]
-enabled = true
-
-[github]
-[github.token]
-token = "${RT_TOKEN}"
-
-# ref -> master, commit or tag
-[github.plugins]
-# Some plugins like centrifuge, temporal, http..etc are commented out as they error out during compile
-# But the important amqp1 is included along with jobs...etc
-
-# LOGS
-appLogger = { ref = "v5.0.2", owner = "roadrunner-server", repository = "app-logger" }
-logger = { ref = "v5.0.2", owner = "roadrunner-server", repository = "logger" }
-lock = { ref = "v5.0.2", owner = "roadrunner-server", repository = "lock" }
-rpc = { ref = "v5.0.2", owner = "roadrunner-server", repository = "rpc" }
-
-# CENTRIFUGE BROADCASTING PLATFORM
-#centrifuge = { ref = "v5.0.2", owner = "roadrunner-server", repository = "centrifuge" }
-
-# WORKFLOWS ENGINE
-#temporal = { ref = "v5.1.0", owner = "temporalio", repository = "roadrunner-temporal" }
-
-# METRICS
-metrics = { ref = "v5.0.2", owner = "roadrunner-server", repository = "metrics" }
-
-# HTTP + MIDDLEWARE
-#http = { ref = "v5.0.2", owner = "roadrunner-server", repository = "http" }
-gzip = { ref = "v5.0.2", owner = "roadrunner-server", repository = "gzip" }
-prometheus = { ref = "v5.0.1", owner = "roadrunner-server", repository = "prometheus" }
-headers = { ref = "v5.0.2", owner = "roadrunner-server", repository = "headers" }
-static = { ref = "v5.0.1", owner = "roadrunner-server", repository = "static" }
-proxy = { ref = "v5.0.2", owner = "roadrunner-server", repository = "proxy_ip_parser" }
-send = { ref = "v5.0.1", owner = "roadrunner-server", repository = "send" }
-
-# OpenTelemetry
-#otel = { ref = "v5.0.1", owner = "roadrunner-server", repository = "otel" }
-
-# SERVER
-server = { ref = "v5.0.2", owner = "roadrunner-server", repository = "server" }
-
-# SERVICE aka lightweight systemd
-service = { ref = "v5.0.2", owner = "roadrunner-server", repository = "service" }
-
-# JOBS
-jobs = { ref = "v5.0.2", owner = "roadrunner-server", repository = "jobs" }
-amqp = { ref = "v5.0.2", owner = "roadrunner-server", repository = "amqp" }
-sqs = { ref = "v5.0.2", owner = "roadrunner-server", repository = "sqs" }
-beanstalk = { ref = "v5.0.2", owner = "roadrunner-server", repository = "beanstalk" }
-nats = { ref = "v5.0.2", owner = "roadrunner-server", repository = "nats" }
-kafka = { ref = "v5.0.2", owner = "roadrunner-server", repository = "kafka" }
-googlepubsub = { ref = "v5.0.2", owner = "roadrunner-server", repository = "google-pub-sub" }
-amqp1 = { ref = "master", owner = "ammadfa", repository = "amqp1" }
-
-# KV
-kv = { ref = "v5.0.2", owner = "roadrunner-server", repository = "kv" }
-boltdb = { ref = "v5.0.2", owner = "roadrunner-server", repository = "boltdb" }
-memory = { ref = "v5.0.2", owner = "roadrunner-server", repository = "memory" }
-redis = { ref = "v5.0.2", owner = "roadrunner-server", repository = "redis" }
-memcached = { ref = "v5.0.2", owner = "roadrunner-server", repository = "memcached" }
-
-# FILESERVER (static files)
-fileserver = { ref = "v5.0.1", owner = "roadrunner-server", repository = "fileserver" }
-
-# gRPC plugin
-#grpc = { ref = "v5.0.2", owner = "roadrunner-server", repository = "grpc" }
-
-# HEALTHCHECKS + READINESS CHECKS
-status = { ref = "v5.0.2", owner = "roadrunner-server", repository = "status" }
-
-# TCP for the RAW TCP PAYLOADS
-tcp = { ref = "v5.0.2", owner = "roadrunner-server", repository = "tcp" }
+enabled = false
 
 [log]
-level = "info"
+level = "debug"
 mode = "production"
+
+# optional, needed only to download RR once (per version)
+[github.token]
+token = "${GITHUB_TOKEN}"
+
+[plugins.appLogger]
+tag = "latest"
+module_name = "github.com/roadrunner-server/app-logger/v5"
+
+[plugins.logger]
+tag = "latest"
+module_name = "github.com/roadrunner-server/logger/v5"
+
+[plugins.lock]
+tag = "latest"
+module_name = "github.com/roadrunner-server/lock/v5"
+
+[plugins.rpc]
+tag = "latest"
+module_name = "github.com/roadrunner-server/rpc/v5"
+
+[plugins.centrifuge]
+tag = "latest"
+module_name = "github.com/roadrunner-server/centrifuge/v5"
+
+[plugins.temporal]
+tag = "latest"
+module_name = "github.com/temporalio/roadrunner-temporal/v5"
+
+[plugins.metrics]
+tag = "latest"
+module_name = "github.com/roadrunner-server/metrics/v5"
+
+[plugins.otel]
+tag = "latest"
+module_name = "github.com/roadrunner-server/otel/v5"
+
+[plugins.http]
+tag = "latest"
+module_name = "github.com/roadrunner-server/http/v5"
+
+[plugins.gzip]
+tag = "latest"
+module_name = "github.com/roadrunner-server/gzip/v5"
+
+[plugins.prometheus]
+tag = "latest"
+module_name = "github.com/roadrunner-server/prometheus/v5"
+
+[plugins.headers]
+tag = "latest"
+module_name = "github.com/roadrunner-server/headers/v5"
+
+[plugins.static]
+tag = "latest"
+module_name = "github.com/roadrunner-server/static/v5"
+
+[plugins.proxy]
+tag = "latest"
+module_name = "github.com/roadrunner-server/proxy_ip_parser/v5"
+
+[plugins.send]
+tag = "latest"
+module_name = "github.com/roadrunner-server/send/v5"
+
+[plugins.server]
+tag = "latest"
+module_name = "github.com/roadrunner-server/server/v5"
+
+[plugins.service]
+tag = "latest"
+module_name = "github.com/roadrunner-server/service/v5"
+
+[plugins.jobs]
+tag = "latest"
+module_name = "github.com/roadrunner-server/jobs/v5"
+
+[plugins.amqp]
+tag = "latest"
+module_name = "github.com/roadrunner-server/amqp/v5"
+
+[plugins.amqp1]
+tag = "master"
+module_name = "github.com/ammadfa/amqp1"
+
+[plugins.sqs]
+tag = "latest"
+module_name = "github.com/roadrunner-server/sqs/v5"
+
+[plugins.beanstalk]
+tag = "latest"
+module_name = "github.com/roadrunner-server/beanstalk/v5"
+
+[plugins.nats]
+tag = "latest"
+module_name = "github.com/roadrunner-server/nats/v5"
+
+[plugins.kafka]
+tag = "latest"
+module_name = "github.com/roadrunner-server/kafka/v5"
+
+[plugins.googlepubsub]
+tag = "latest"
+module_name = "github.com/roadrunner-server/google-pub-sub/v5"
+
+[plugins.kv]
+tag = "latest"
+module_name = "github.com/roadrunner-server/kv/v5"
+
+[plugins.boltdb]
+tag = "latest"
+module_name = "github.com/roadrunner-server/boltdb/v5"
+
+[plugins.memory]
+tag = "latest"
+module_name = "github.com/roadrunner-server/memory/v5"
+
+[plugins.redis]
+tag = "latest"
+module_name = "github.com/roadrunner-server/redis/v5"
+
+[plugins.memcached]
+tag = "latest"
+module_name = "github.com/roadrunner-server/memcached/v5"
+
+[plugins.fileserver]
+tag = "latest"
+module_name = "github.com/roadrunner-server/fileserver/v5"
+
+[plugins.grpc]
+tag = "latest"
+module_name = "github.com/roadrunner-server/grpc/v5"
+
+[plugins.status]
+tag = "latest"
+module_name = "github.com/roadrunner-server/status/v5"
+
+[plugins.tcp]
+tag = "latest"
+module_name = "github.com/roadrunner-server/tcp/v5"
